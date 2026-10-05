@@ -162,12 +162,12 @@ def capture(components):
 
         timestamp = datetime.now()
 
-        machine_code = 'COD0001'
+        
 
         dados = [user, cpu_percent, cpu_frequency, ram_percent, swap_memory_total,
                 swap_memory_used, swap_memory_percent, upload_speed, download_speed,
                 temperature, fans_speed, disk, gpu_usage, gpu_energy,
-                gpu_temperature, gpu_fan_speed, timestamp, machine_code]
+                gpu_temperature, gpu_fan_speed, timestamp]
 
         exhibit(dados)
         store(dados, nome_arquivo)
@@ -192,7 +192,6 @@ def exhibit(data):
     line_gpu_temp = f"Temperatura atual da GPU: {data[14]} graus Celsius"
     line_gpu_fan_speed = f"Velocidade da ventoinha da GPU: {data[15]} RPM"
     line_timestamp = f"Momento de captura: {data[16].strftime('%Y-%m-%d %H:%M:%S')}"
-    line_machine_code = f"Código de identificação da máquina: {data[17]}"
 
     print(f"""
     ----------------------------------------------------------------
@@ -213,7 +212,6 @@ def exhibit(data):
     | {line_gpu_temp:<60} |
     | {line_gpu_fan_speed:<60} |
     | {line_timestamp:<60} |
-    | {line_machine_code:<60} |
     ----------------------------------------------------------------
     """)
 
@@ -221,11 +219,11 @@ def store(data, nome_arquivo):
     if(not os.path.exists(nome_arquivo)):
         with open(nome_arquivo, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile, delimiter=';')
-                writer.writerow(["user", "cpu_percent", "cpu_frequency", "ram_percent", "swap_memory_total", "swap_memory_used", "swap_memory_percent", "upload_speed", "download_speed", "temperature", "fans_speed", "disk", "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed", "timestamp", "machine_code"])
+                writer.writerow(["user", "cpu_percent", "cpu_frequency", "ram_percent", "swap_memory_total", "swap_memory_used", "swap_memory_percent", "upload_speed", "download_speed", "temperature", "fans_speed", "disk", "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed", "timestamp"])
     
     with open(nome_arquivo, 'a', newline='') as csvfile:
         writer = csv.writer(csvfile, delimiter=';')
-        writer.writerow([data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15], data[16], data[17]])
+        writer.writerow([data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15], data[16]])
    
 
 
