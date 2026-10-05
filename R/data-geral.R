@@ -392,3 +392,12 @@ ggplot(data_geral, aes(ram_percent, swap_memory_percent, color = user)) +
 
 predict(coorelacao)
 
+
+ggplot(data_geral, aes(ram_percent, cpu_percent, color = user)) +
+  geom_point(size = 4) +
+  theme_minimal()
+
+
+ggplot(data_geral , aes(timestamp_clean , cpu_percent , color = user)) +
+  geom_point(size = 3)
+
