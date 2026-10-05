@@ -341,3 +341,13 @@ ggplot(data, aes(format(timestamp_clean, "%H:00"),user, fill = ave(cpu_percent, 
   scale_fill_gradient(low = "green", high = "red") +
   labs(title = "cpu media por hora" , fill = "cpu")
 
+
+ggplot(data , aes(ram_percent , cpu_percent ))+
+  geom_point(size = 4 , colour = "purple")
+
+ggplot(data , aes(timestamp_clean , cpu_percent)) +
+  geom_point(size = 4) + geom_smooth( colour = "green")  + 
+  theme_minimal()  +
+  labs(title = "cpu x tempo")
+
+
