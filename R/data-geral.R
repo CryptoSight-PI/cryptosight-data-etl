@@ -132,6 +132,36 @@ data_geral <- data_geral[order(data_geral$timestamp_clean), ]
 
 contadorcpu
 
+
+#CASO 1 - Derretimento de 90 GPU por causa de superaquecimento e derretimento nos cabos SATA
+#https://www.estadao.com.br/tecmundo/big-techs/243000-minerador-tem-prejuizo-r-500-mil-incendio-placas-de-video/
+#Derretimento das placas de video por causa da alta temperatura (não monitorada, gerou um prejuizo de 500 mil)
+
+ggplot(data = NULL , aes(x = c(65, 70, 75, 90, 120, 180, 230), y = c(0, 0, 1, 10, 15, 60, 500))) +
+  geom_line(color = "red" , size = 1 ) +
+  geom_point(size = 3) +
+  labs( title = "prejuizo x temperatura" , x = "temperatura" , y = "prejuizo (mil)")
+
+
+#CASO 2 - Incendio em um fazendo de mineração de bitcoin na Tailândia
+#https://qz.com/293418/an-enormous-bitcoin-mine-went-up-in-flames-affecting-the-entire-network
+#Incendio causa prejuizo enorme para fazenda de mineração na Tailândia
+
+ggplot(data = NULL, aes(x = factor(c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4"), levels = c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4")), y = c(230, 270 , 340 , 285 , 300 , 260 ,  300 ) , group = 1)) + 
+  geom_line(color = "red" , size = 1) +
+  geom_point(size = 3) + 
+  labs(title = "hashrate x dias" , subtitle = "Gráfico da "  , y = "hashrate" , x = "dias")
+
+ggplot(data = NULL, aes(x = c(30 , 40 , 60 , 70 ,80 , 120) , y = c(2000 , 1500 , 1000 , 500 , 100 , 50))) +
+  geom_line( color = "red" , size = 1) + 
+  geom_point(size =3) + 
+  labs(title = "ventoinha x temperatura" , x = "temperatura" , y = "ventoinha (rpm)")
+
+
+
+
+#INICIO ANALISE
+
 barplot(table(data_geral$user), las = 2, col = "grey",
         main = "qtd leitura por maquina")
 
