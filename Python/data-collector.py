@@ -9,6 +9,7 @@ except ImportError:
 import csv
 import os
 from config import cursor
+from s3config import mandars3
 
 intervalo_captura = 10
 intervalo_csv = 60
@@ -58,6 +59,8 @@ def capture(components):
         current_time = time.time()
 
         if(current_time - tempo_inicio_csv >= intervalo_csv):
+            if(os.path.exists(nome_arquivo)):
+                mandars3(data_atual , nome_arquivo)
             data_atual = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
             nome_arquivo = f"{id_empresa}-{data_atual}-{user.replace(':', '-')}.csv"
             tempo_inicio_csv = current_time
