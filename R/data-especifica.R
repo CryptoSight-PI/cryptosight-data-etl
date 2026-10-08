@@ -95,39 +95,7 @@
   data$alerta_swap <- ifelse(data$swap_memory_percent > 50, 1, 0)  
   data$alerta_disco <- ifelse(data$disk > 800, 1, 0) 
   
-
-
-
-
-#CASO 1 - Derretimento de 90 GPU por causa de superaquecimento e derretimento nos cabos SATA
-#https://www.estadao.com.br/tecmundo/big-techs/243000-minerador-tem-prejuizo-r-500-mil-incendio-placas-de-video/
-#Derretimento das placas de video por causa da alta temperatura (não monitorada, gerou um prejuizo de 500 mil)
-
-ggplot(data = NULL , aes(x = c(65, 70, 75, 90, 120, 180, 230), y = c(0, 0, 1, 10, 15, 60, 500))) +
-  geom_line(color = "red" , size = 1 ) +
-  geom_point(size = 3) +
-  labs( title = "prejuizo x temperatura" , x = "temperatura" , y = "prejuizo (mil)")
-
-
-#CASO 2 - Incendio em um fazendo de mineração de bitcoin na Tailândia
-#https://qz.com/293418/an-enormous-bitcoin-mine-went-up-in-flames-affecting-the-entire-network
-#Incendio causa prejuizo enorme para fazenda de mineração na Tailândia
-
-ggplot(data = NULL, aes(x = factor(c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4"), levels = c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4")), y = c(230, 270 , 340 , 285 , 300 , 260 ,  300 ) , group = 1)) + 
-  geom_line(color = "red" , size = 1) +
-  geom_point(size = 3) + 
-  labs(title = "hashrate x dias" , subtitle = "Gráfico da "  , y = "hashrate" , x = "dias")
-
-ggplot(data = NULL, aes(x = c(30 , 40 , 60 , 70 ,80 , 120) , y = c(2000 , 1500 , 1000 , 500 , 100 , 50))) +
-  geom_line( color = "red" , size = 1) + 
-  geom_point(size =3) + 
-  labs(title = "ventoinha x temperatura" , x = "temperatura" , y = "ventoinha (rpm)")
-
-
-
-
-  #INICIO ANALISE
-
+  
   plot(data$timestamp_clean , data$cpu_percent , col = ifelse(data$cpu_percent > 95 | data$cpu_percent < 70, "red", "green") , pch = 19 , main = "cpu geral x tempo" , type = "o" )
   abline(h = c(70 ,95) , col = "green" , lwd = 4)
   
@@ -202,6 +170,7 @@ ggplot(data = NULL, aes(x = c(30 , 40 , 60 , 70 ,80 , 120) , y = c(2000 , 1500 ,
   
   
 
+  
   plot(data$timestamp_clean, data$ram_percent, type = "o", col = "blue", lwd = 2,
        ylim = c(0, 100), xlab = "Tempo", ylab = "Percentual (%)", main = "Memória X Swap")
   lines(data$timestamp_clean, data$swap_memory_percent, type = "o", col = "red", lwd = 2)
@@ -261,20 +230,6 @@ ggplot(data = NULL, aes(x = c(30 , 40 , 60 , 70 ,80 , 120) , y = c(2000 , 1500 ,
   
   
   
-  
-boxplot(data$cpu_percent)
-
-
-plot(data$timestamp_clean ,data$cpu_percent,  
-     pch = 19, col = ifelse(data$cpu_percent > 80 | data$cpu_percent < 60, "red", "darkgreen"),
-      ylim = c(0, 100), type = "o",
-     xlab = "timestamp", ylab = "cpu (%)",
-     main = "CRYPTOSIGHT - CPU")
-abline( h = c(60,80) , col = "green" , lwd = 3)
-legend("topleft" ,legend = paste("total alertas: " , contadorcpu))
-legend("topright", legend = c("porcentagem de cpu"), col = c("darkgreen") , lwd = 4)
-
-
 
 
 plot(data$timestamp_clean , data$ram_percent , col = "purple" , pch = 19 , lwd = 2 , type = "o" , ylim = c(0, 100) , main = "cryptosight - ram")
@@ -331,7 +286,7 @@ ggplot(df_alertas, aes(user, Freq, fill = componente)) +
 
 
 ggplot(data, aes(ram_percent, swap_memory_percent, color = user)) +
-  geom_point(alpha = 0.6, size = 2) +
+  geom_point(size = 4) +
   geom_smooth(method = "lm", color = "red") +
   labs(
     title = "Uso de RAM com Swap",
@@ -368,18 +323,17 @@ ggplot(data, aes(upload_speed, download_speed, color = user )) +
   labs(title = "download x upload por MAC")
 
 
-ggplot(data, aes(format(timestamp_clean, "%H:00"),user, fill = ave(cpu_percent, user, format(timestamp_clean, "%H:00")))) +
+ggplot(data, aes(format(timestamp_clean, "%M:00"),user, fill = ave(cpu_percent, user, format(timestamp_clean, "%M:00")))) +
   geom_tile() +
   scale_fill_gradient(low = "green", high = "red") +
-  labs(title = "cpu media por hora" , fill = "cpu")
+  labs(title = "cpu media por minuto nessa hora" , fill = "cpu")
 
 
 ggplot(data , aes(ram_percent , cpu_percent ))+
   geom_point(size = 4 , colour = "purple")
 
 ggplot(data , aes(timestamp_clean , cpu_percent)) +
-  geom_point(size = 4) + geom_smooth( colour = "green")  + 
+  geom_point(size = 4 , colour = "darkgreen") + geom_smooth( colour = "lightgreen")  + 
   theme_minimal()  +
   labs(title = "cpu x tempo")
-
 

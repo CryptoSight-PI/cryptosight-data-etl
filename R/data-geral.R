@@ -133,9 +133,11 @@ data_geral <- data_geral[order(data_geral$timestamp_clean), ]
 contadorcpu
 
 
+
 #CASO 1 - Derretimento de 90 GPU por causa de superaquecimento e derretimento nos cabos SATA
 #https://www.estadao.com.br/tecmundo/big-techs/243000-minerador-tem-prejuizo-r-500-mil-incendio-placas-de-video/
 #Derretimento das placas de video por causa da alta temperatura (não monitorada, gerou um prejuizo de 500 mil)
+
 
 ggplot(data = NULL , aes(x = c(65, 70, 75, 90, 120, 180, 230), y = c(0, 0, 1, 10, 15, 60, 500))) +
   geom_line(color = "red" , size = 1 ) +
@@ -147,6 +149,7 @@ ggplot(data = NULL , aes(x = c(65, 70, 75, 90, 120, 180, 230), y = c(0, 0, 1, 10
 #https://qz.com/293418/an-enormous-bitcoin-mine-went-up-in-flames-affecting-the-entire-network
 #Incendio causa prejuizo enorme para fazenda de mineração na Tailândia
 
+
 ggplot(data = NULL, aes(x = factor(c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4"), levels = c("oct26", "oct28" , "oct30" ,"nov1" , "nov2" , "nov3" , "nov4")), y = c(230, 270 , 340 , 285 , 300 , 260 ,  300 ) , group = 1)) + 
   geom_line(color = "red" , size = 1) +
   geom_point(size = 3) + 
@@ -157,10 +160,8 @@ ggplot(data = NULL, aes(x = c(30 , 40 , 60 , 70 ,80 , 120) , y = c(2000 , 1500 ,
   geom_point(size =3) + 
   labs(title = "ventoinha x temperatura" , x = "temperatura" , y = "ventoinha (rpm)")
 
-
-
-
 #INICIO ANALISE
+
 
 barplot(table(data_geral$user), las = 2, col = "grey",
         main = "qtd leitura por maquina")
@@ -234,7 +235,7 @@ abline(h = c(80 , 95), col = "red", lwd = 4)
 
 plot(data_geral$timestamp_clean , data_geral$ram_percent , col = ifelse(data_geral$ram_percent < 80 | data_geral$ram_percent > 95 , "red" , "green") , pch = 19  , ylim = c(0 , 100))
 abline(h = c(80 , 95) , col = "green" , lwd = 2)
-legend("topleft" , legend = paste("alertas: " , sum(data_geral$alerta_ram)))
+legend("top" , legend = paste("alertas: " , sum(data_geral$alerta_ram)))
 
 
 
@@ -246,7 +247,7 @@ ggplot(data_geral, aes(data_geral$ram_percent, data_geral$swap_memory_percent, c
 
 plot(data_geral$timestamp_clean , data_geral$ram_percent , type = "l" , ylim = c(0 ,100) , col = "blue" , lwd = 2 , main = "swap x ram por tempo")
 lines(data_geral$timestamp_clean , data_geral$swap_memory_percent , col = "red" , lwd = 2)
-legend("topright" , legend = c("swap" , "ram") , col = c("red" , "blue") , pch = 19)
+legend("top" , legend = c("swap" , "ram") , col = c("red" , "blue") , pch = 19)
 
 
 plot(data_geral$ram_percent, data_geral$swap_memory_percent, , ylim = c(0, 80), pch = 19, col = "blue",
@@ -277,7 +278,7 @@ pie(c(sum(data_geral$alerta_cpu) , sum(data_geral$alerta_ram) , sum(data_geral$a
 legend("topright", legend = c("alerta cpu" , "alerta ram" , "alerta temperatura" , "alerta gpu" , "alerta swap" , "alerta disco"), col = c("red" , "blue" , "green"  , "purple" , "pink" , "cyan") , pch = 19)
 
  
-pie(c((contador_base - contadorgeral), contadorgeral), col = c("green", "red"),labels = c(leituras_normais, contadorgeral),main = "alertas gerais")
+pie(c((contador_base - contadorgeral), contadorgeral), col = c("green", "red"),labels = c(leituras_normais, contadorgeral),main = "alertas gerais") +
 legend("topright", legend = c("Leituras normais", "Leituras que deram alerta"), col = c("green", "red"), pch = 19)
 
 
@@ -398,11 +399,28 @@ barplot(colSums(is.na(data_geral)), las = 2, col = "red",
 
 heatmap(cor(data_geral[c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")]))
 
-ggplot(as.data.frame(as.table(cor(data_geral[, c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")], use = "pairwise.complete.obs"))),
+
+
+
+print(as.table(cor(data_geral[, c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")], use = "pairwise.complete.obs")))
+
+
+print(as.data.frame(as.table(cor(data_geral[ c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")], use = "pairwise.complete.obs"))))
+
+
+ggplot(as.data.frame(as.table(cor(data_geral[ c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")], use = "pairwise.complete.obs"))),
        aes(Var1, Var2, fill = Freq)) +
   geom_tile() +
+  labs(title = "coorelacoes (1 = positiva / -1 = negativa)" ) +
   scale_fill_gradient2(low = "blue", high = "red")
 
+
+heatmap(
+  cor(data_geral[ c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")
+] ),
+  col = hcl.colors(100, "Blue-Red")
+) +
+  legend("topright" , legend = c("coorelacao positiva (1)" , "coorelacao negativa (-1)") , col = c("red" , "blue") , pch = 19   )
 
 
 print(as.table(cor(data_geral[, c("cpu_percent", "ram_percent", "swap_memory_percent", "disk", "cpu_frequency", "upload_speed", "download_speed")], use = "pairwise.complete.obs")))
@@ -421,6 +439,7 @@ ggplot(data_geral, aes(ram_percent, swap_memory_percent, color = user)) +
   ) 
 
 predict(coorelacao)
+
 
 
 ggplot(data_geral, aes(ram_percent, cpu_percent, color = user)) +
