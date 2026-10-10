@@ -3,7 +3,7 @@
   
 
 
-  data <- `1.2026.10.02_20.07.18.9c.c7.d3.fe.61.5e`
+  data <- `1.2026.10.02_13.11.58.9c.c7.d3.fe.61.5e`
   #data <- `data.(2)`  
 
   
@@ -337,3 +337,10 @@ ggplot(data , aes(timestamp_clean , cpu_percent)) +
   theme_minimal()  +
   labs(title = "cpu x tempo")
 
+
+
+coorelacao <- lm(swap_memory_percent ~ ram_percent, data = data)         
+
+summary(coorelacao)
+
+predict(coorelacao, list(ram_percent = 60))
