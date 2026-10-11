@@ -34,6 +34,16 @@ ncol(data_vini)
 
 
 
+#opcional (se quiser mudar o mac pelo nome descomente)
+#data_geral$user[data_geral$user == '9c:c7:d3:fe:61:5e'] <- "marcelo"
+#data_geral$user[data_geral$user == '9c:c7:d3:74:4d:a1'] <- "yasmin"
+#data_geral$user[data_geral$user == '14:13:33:89:5d:4b'] <- "joao"
+#data_geral$user[data_geral$user == '08:f9:7e:7f:a6:69'] <- "minomo"
+#data_geral$user[data_geral$user == '34:68:95:df:a0:09'] <- "lucas"
+#data_geral$user[data_geral$user == '10:ff:e0:67:07:0e'] <- "vini"
+
+
+
 library(ggplot2)
 
 maquinas <- unique(data_geral$user)
