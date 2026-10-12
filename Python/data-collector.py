@@ -10,6 +10,7 @@ import csv
 import os
 from config import cursor
 from s3config import mandars3
+from process import capturarprocesso
 
 intervalo_captura = 10
 intervalo_csv = 60
@@ -61,6 +62,13 @@ def capture(components):
         if(current_time - tempo_inicio_csv >= intervalo_csv):
             if(os.path.exists(nome_arquivo)):
                 mandars3(data_atual , nome_arquivo)
+                print("teste1")
+            df_processo = capturarprocesso()
+            nome_arquivo_proc = f"{id_empresa}_processos_{data_atual}_{user.replace(':', '-')}.csv"
+            df_processo.to_csv(nome_arquivo_proc, sep=";" , index=False)
+            if(os.path.exists(nome_arquivo_proc)):
+                mandars3(data_atual , nome_arquivo_proc)
+                print("teste2")
             data_atual = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
             nome_arquivo = f"{id_empresa}-{data_atual}-{user.replace(':', '-')}.csv"
             tempo_inicio_csv = current_time
