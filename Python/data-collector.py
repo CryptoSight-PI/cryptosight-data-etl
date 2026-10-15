@@ -238,7 +238,7 @@ def store(data, nome_arquivo):
    
 
 
-query = "select e.id , m.mac_address from empresa e join farm f on f.id_empresa = e.id join maquina m on m.id_farm = f.id where m.mac_address = (%s);"
+query = "select e.id , m.mac_address from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id where m.mac_address = (%s);"
 cursor.execute(query , [user])
 resultado1 = cursor.fetchall()
 id_empresa = resultado1[0][0]
@@ -246,7 +246,7 @@ print(id_empresa)
 if(resultado1):
     try:
         print("mac no banco")
-        query2 = "select c.nome from empresa e join farm f on f.id_empresa = e.id join maquina m on m.id_farm = f.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where m.mac_address = (%s) and mc.monitorado = 1;"
+        query2 = "select c.nome from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where m.mac_address = (%s) and mc.monitorado = 1;"
         cursor.execute(query2, [user])
         resultado2 = cursor.fetchall()
         print(resultado2)
