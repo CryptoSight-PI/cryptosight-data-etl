@@ -57,10 +57,10 @@ def capture(components):
     while True:
         current_time = time.time()
 
-        if(current_time - tempo_inicio_csv >= intervalo_csv):
-            data_atual = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            nome_arquivo = f"{id_empresa}-{data_atual}-{user.replace(':', '-')}.csv"
-            tempo_inicio_csv = current_time
+        # if(current_time - tempo_inicio_csv >= intervalo_csv):
+        #     data_atual = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        #     nome_arquivo = f"{id_empresa}-{data_atual}-{user.replace(':', '-')}.csv"
+        #     tempo_inicio_csv = current_time
             
         time_delta = current_time - last_time
         current_net = psutil.net_io_counters()
