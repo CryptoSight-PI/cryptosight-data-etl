@@ -19,6 +19,8 @@ import csv
 import os
 
 from config import cursor
+from s3config import mandars3
+from process import capturarprocesso
 
 
 PASTA_CSV = os.path.join(
@@ -127,7 +129,15 @@ def capture(components):
 
 
         if(current_time - tempo_inicio_csv >= intervalo_csv):
-
+            if(os.path.exists(nome_arquivo)):
+                mandars3(data_atual , nome_arquivo)
+                print("teste1")
+            df_processo = capturarprocesso()
+            nome_arquivo_proc = f"{id_empresa}_processos_{data_atual}_{user.replace(':', '-')}.csv"
+            df_processo.to_csv(nome_arquivo_proc, sep=";" , index=False)
+            if(os.path.exists(nome_arquivo_proc)):
+                mandars3(data_atual , nome_arquivo_proc)
+                print("teste2")
             data_atual = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
             nome_arquivo = os.path.join(
@@ -471,6 +481,7 @@ def store(data, nome_arquivo):
 
 query = "select e.id , m.mac_address from empresa e join farm f on f.id_empresa = e.id join maquina m on m.id_farm = f.id where m.mac_address = (%s);"
 
+query = "select e.id , m.mac_address from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id where m.mac_address = (%s);"
 cursor.execute(query , [user])
 
 resultado1 = cursor.fetchall()
@@ -484,9 +495,7 @@ if(resultado1):
     try:
 
         print("mac no banco")
-
-        query2 = "select c.nome from empresa e join farm f on f.id_empresa = e.id join maquina m on m.id_farm = f.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where m.mac_address = (%s) and mc.monitorado = 1;"
-
+        query2 = "select c.nome from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where m.mac_address = (%s) and mc.monitorado = 1;"
         cursor.execute(query2, [user])
 
         resultado2 = cursor.fetchall()
