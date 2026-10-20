@@ -5,3 +5,4 @@ mysql-connector-python
 python-dotenv
 pynvml
 boto3
+nvidia-ml-py

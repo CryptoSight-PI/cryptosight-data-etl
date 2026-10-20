@@ -1,5 +1,9 @@
 import psutil
+<<<<<<< HEAD
+import pynvml
+=======
 
+>>>>>>> 853c8841fc2198106670361abf9b7a34e76cdc5d
 import time
 
 from datetime import datetime
@@ -255,6 +259,15 @@ def capture(components):
 
         disk = round(((psutil.disk_usage('/').free) / (1024 ** 3)), 2) if components[10] == 1 else None
 
+<<<<<<< HEAD
+        if components[11] == 1 or components[12] == 1:
+            gpu_usage = []
+            gpu_memory_usage = []
+            gpu_temperature = []
+            gpu_energy = []
+            gpu_fan_speed = []
+
+=======
 
 
         if components[11] == 1:
@@ -315,10 +328,68 @@ def capture(components):
 
         if components[12] == 1:
 
+>>>>>>> 853c8841fc2198106670361abf9b7a34e76cdc5d
             try:
 
                 pynvml.nvmlInit()
 
+<<<<<<< HEAD
+                device_count = pynvml.nvmlDeviceGetCount()
+
+                for i in range(device_count):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+
+                    # Uso de processamento da GPU (%)
+                    utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                    gpu_usage.append(utilization.gpu)   
+
+                    # Uso da memória de vídeo (%)
+                    memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    memory_percent = round(
+                        memory.used * 100 / memory.total, 2
+                    )
+                    gpu_memory_usage.append(memory_percent)
+
+                    # Temperatura da NVIDIA (°C)
+                    temp = pynvml.nvmlDeviceGetTemperature(
+                        handle,
+                        pynvml.NVML_TEMPERATURE_GPU
+                    )
+                    gpu_temperature.append(temp)
+
+                    # Consumo de energia (W), quando suportado
+                    try:
+                        power_mw = pynvml.nvmlDeviceGetPowerUsage(handle)
+                        gpu_energy.append(round(power_mw / 1000, 2))
+                    except pynvml.NVMLError:
+                        gpu_energy.append(None)
+
+                    # Velocidade da ventoinha (%), quando suportada
+                    try:
+                        fan = pynvml.nvmlDeviceGetFanSpeed(handle)
+                        gpu_fan_speed.append(fan)
+                    except pynvml.NVMLError:
+                        gpu_fan_speed.append(None)
+
+            except pynvml.NVMLError as e:
+                print(f"Erro ao consultar NVIDIA: {e}")
+                gpu_usage = None
+                gpu_memory_usage = None
+                gpu_temperature = None
+                gpu_energy = None
+                gpu_fan_speed = None
+
+            finally:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
+
+        else:
+            gpu_usage = None
+            gpu_memory_usage = None
+            gpu_temperature = None
+=======
                 deviceCount = pynvml.nvmlDeviceGetCount()
 
                 gpu_energy = []
@@ -341,7 +412,9 @@ def capture(components):
 
         else:
 
+>>>>>>> 853c8841fc2198106670361abf9b7a34e76cdc5d
             gpu_energy = None
+            gpu_fan_speed = None
 
 
 
