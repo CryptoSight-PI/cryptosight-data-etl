@@ -1,4 +1,3 @@
-
 import os
 import re
 import shutil
@@ -14,11 +13,15 @@ DB_CONFIG = {
     "database": os.getenv("DB_DATABASE")
 }
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PASTA_SILVER = os.path.join(BASE_DIR, "Silver")
+
 ARQUIVOS = [
     "clean_data.csv",
     "dados_nulos.csv",
-    "formated-data.json"
+    "treated-data.json"
 ]
+
 
 def extrair_id(nome_arquivo):
     nome = os.path.basename(nome_arquivo)
@@ -54,7 +57,6 @@ def buscar_empresa(id_empresa):
 
         razao_social = empresa[1]
         nome_fantasia = empresa[2]
-
         nome_empresa = nome_fantasia or razao_social
 
         if not nome_empresa:
@@ -72,20 +74,22 @@ def buscar_empresa(id_empresa):
 
 
 def criar_pasta(nome_empresa):
-
     nome_pasta = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip()
 
-    os.makedirs(nome_pasta, exist_ok=True)
+    pasta_destino = os.path.join(BASE_DIR, nome_pasta)
+    os.makedirs(pasta_destino, exist_ok=True)
 
     for arquivo in ARQUIVOS:
-        if os.path.isfile(arquivo):
-            destino = os.path.join(nome_pasta, os.path.basename(arquivo))
-            shutil.move(arquivo, destino)
-            print(f"Arquivo movido: {arquivo} -> {destino}")
-        else:
-            print(f"Arquivo não encontrado: {arquivo}")
+        origem = os.path.join(PASTA_SILVER, arquivo)
 
-    print(f"Pasta da empresa: {nome_pasta}")
+        if os.path.isfile(origem):
+            destino = os.path.join(pasta_destino, arquivo)
+            shutil.move(origem, destino)
+            print(f"Arquivo movido: {origem} -> {destino}")
+        else:
+            print(f"Arquivo não encontrado: {origem}")
+
+    print(f"Pasta da empresa: {pasta_destino}")
 
 
 def main():
