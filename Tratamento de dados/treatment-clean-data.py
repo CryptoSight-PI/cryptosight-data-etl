@@ -12,8 +12,14 @@ clean_cloumns = [
 ]
 
 
-# se as colunas que estão no vetor vierm zeradas apaga as linha
-df[clean_cloumns] = df[clean_cloumns].replace(0, np.nan)
+
+filtro_nulas = (df[clean_cloumns].isnull() | (df[clean_cloumns] == 0)).any(axis=1);
+
+lines_null = df.loc[filtro_nulas]
+
+lines_null.to_csv("dados_nulos.csv", sep=";", index=False)
+
+df_filtrado = df.loc[~filtro_nulas].copy()
 
 # cria um data frame para armazenar os dados filtrados 
 df_filtrado = df.dropna(subset=clean_cloumns)
