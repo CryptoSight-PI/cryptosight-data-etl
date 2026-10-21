@@ -1,106 +1,48 @@
+import argparse
 import csv
 import json
-import mysql.connector
-from dotenv import load_dotenv
-import os
-import re
-from s3_utils import enviar_para_s3  # função que envia arquivos ao S3
+from pathlib import Path
 
-load_dotenv()
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_DATABASE")
-}
+from s3_utils import enviar_para_s3
 
 
-PASTA_SILVER = os.path.join(".", "Silver")
-
-def extrair_id(nome_arquivo):
-    nome = os.path.basename(nome_arquivo)
-    resultado = re.match(r"^(\d+)", nome)
-
-    if resultado:
-        return int(resultado.group(1))
-
-    raise ValueError(
-        f"Não foi possível encontrar o ID no arquivo: {nome}"
-    )
+ROOT_DIR = Path(__file__).resolve().parent.parent
+PASTA_SILVER = ROOT_DIR / "Silver"
 
 
-def buscar_empresa(id_empresa):
-    conexao = mysql.connector.connect(**DB_CONFIG)
-
-    try:
-        cursor = conexao.cursor()
-
-        consulta = """
-            SELECT id, razao_social, nome_fantasia
-            FROM empresa
-            WHERE id = %s
-        """
-
-        cursor.execute(consulta, (id_empresa,))
-        empresa = cursor.fetchone()
-
-        if empresa is None:
-            raise ValueError(
-                f"Nenhuma empresa encontrada com ID {id_empresa}"
-            )
-
-        razao_social = empresa[1]
-        nome_fantasia = empresa[2]
-
-        nome_empresa = nome_fantasia or razao_social
-
-        if not nome_empresa:
-            raise ValueError(
-                f"A empresa {id_empresa} não tem nome cadastrado"
-            )
-
-        return nome_empresa
-
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-
-        conexao.close()
-
-
-# Transforma o CSV dos dados tratados em JSON
 def csv_to_json(csv_file, json_file, id_empresa):
     data = []
-
-    with open(csv_file, encoding='utf-8') as f:
-        reader = csv.DictReader(f, delimiter=';')
-
+    with open(csv_file, encoding="utf-8", newline="") as arquivo:
+        reader = csv.DictReader(arquivo, delimiter=";")
         for row in reader:
             linha = {"id_empresa": id_empresa}
             linha.update(row)
             data.append(linha)
 
-    with open(json_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    with open(json_file, "w", encoding="utf-8") as arquivo:
+        json.dump(data, arquivo, ensure_ascii=False, indent=4)
 
 
-# Arquivo usado para extrair o ID da empresa
-arquivo_origem = "1-all-collected.csv"
+def main(id_empresa):
+    if id_empresa is None:
+        raise ValueError("Informe o ID da empresa para gerar os dados trusted.")
 
-id_empresa = extrair_id(arquivo_origem)
+    csv_entrada = PASTA_SILVER / "clean_data.csv"
+    json_saida = PASTA_SILVER / "treated-data.json"
+    if not csv_entrada.is_file():
+        raise FileNotFoundError(f"CSV trusted não encontrado: {csv_entrada}")
 
-# Caminhos de entrada e saída
-csv_entrada = os.path.join(PASTA_SILVER, "clean_data.csv")
-json_saida = os.path.join(PASTA_SILVER, "treated-data.json")
+    csv_to_json(csv_entrada, json_saida, id_empresa)
+    print(f"JSON gerado em {json_saida}.")
+    enviar_para_s3(
+        json_saida,
+        f"trusted/{id_empresa}/treated-data.json",
+        camada="trusted",
+    )
 
-csv_to_json(
-    csv_entrada,
-    json_saida,
-    id_empresa
-)
 
-print("JSON gerado com sucesso!")
-
-# Envia o JSON tratado para a camada silver do bucket
-enviar_para_s3(json_saida, "silver/treated-data.json")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--company-id", type=int, required=True)
+    argumentos = parser.parse_args()
+    main(argumentos.company_id)

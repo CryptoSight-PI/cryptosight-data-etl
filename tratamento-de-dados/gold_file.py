@@ -1,117 +1,93 @@
+import argparse
 import os
 import re
 import shutil
+from pathlib import Path
+
 import mysql.connector
 from dotenv import load_dotenv
 
-load_dotenv()
+from s3_utils import enviar_para_s3
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_DATABASE")
+    "database": os.getenv("DB_DATABASE"),
 }
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PASTA_SILVER = os.path.join(BASE_DIR, "Silver")
-
-ARQUIVOS = [
-    "clean_data.csv",
-    "dados_nulos.csv",
-    "treated-data.json"
-]
-
-
-def extrair_id(nome_arquivo):
-    nome = os.path.basename(nome_arquivo)
-    resultado = re.match(r"^(\d+)", nome)
-
-    if resultado:
-        return int(resultado.group(1))
-
-    raise ValueError(
-        f"Não foi possível encontrar o ID no arquivo: {nome}"
-    )
+PASTA_SILVER = ROOT_DIR / "Silver"
+PASTA_GOLD = ROOT_DIR / "Gold"
+ARQUIVOS = ("clean_data.csv", "dados_nulos.csv", "treated-data.json")
 
 
 def buscar_empresa(id_empresa):
     conexao = mysql.connector.connect(**DB_CONFIG)
-
+    cursor = None
     try:
         cursor = conexao.cursor()
-
-        consulta = """
+        cursor.execute(
+            """
             SELECT id, razao_social, nome_fantasia
             FROM empresa
             WHERE id = %s
-        """
-
-        cursor.execute(consulta, (id_empresa,))
+            """,
+            (id_empresa,),
+        )
         empresa = cursor.fetchone()
-
         if empresa is None:
-            raise ValueError(
-                f"Nenhuma empresa encontrada com ID {id_empresa}"
-            )
+            raise ValueError(f"Nenhuma empresa encontrada com ID {id_empresa}")
 
-        razao_social = empresa[1]
-        nome_fantasia = empresa[2]
-        nome_empresa = nome_fantasia or razao_social
-
+        nome_empresa = empresa[2] or empresa[1]
         if not nome_empresa:
-            raise ValueError(
-                f"A empresa {id_empresa} não tem nome cadastrado"
-            )
-
+            raise ValueError(f"A empresa {id_empresa} não tem nome cadastrado")
         return nome_empresa
-
     finally:
-        if 'cursor' in locals():
+        if cursor is not None:
             cursor.close()
-
         conexao.close()
 
 
-def criar_pasta(nome_empresa):
-    nome_pasta = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip()
+def criar_pasta(id_empresa, nome_empresa):
+    nome_sanitizado = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip()
+    if not nome_sanitizado:
+        raise ValueError("O nome da empresa não pode ser usado como pasta Gold.")
 
-    pasta_destino = os.path.join(BASE_DIR, nome_pasta)
-    os.makedirs(pasta_destino, exist_ok=True)
+    nome_pasta = f"{id_empresa}-{nome_sanitizado}"
+    pasta_destino = PASTA_GOLD / nome_pasta
+    pasta_destino.mkdir(parents=True, exist_ok=True)
 
-    for arquivo in ARQUIVOS:
-        origem = os.path.join(PASTA_SILVER, arquivo)
+    for nome_arquivo in ARQUIVOS:
+        origem = PASTA_SILVER / nome_arquivo
+        if not origem.is_file():
+            raise FileNotFoundError(f"Arquivo trusted não encontrado: {origem}")
 
-        if os.path.isfile(origem):
-            destino = os.path.join(pasta_destino, arquivo)
-            shutil.move(origem, destino)
-            print(f"Arquivo movido: {origem} -> {destino}")
-        else:
-            print(f"Arquivo não encontrado: {origem}")
+        destino = pasta_destino / nome_arquivo
+        shutil.copy2(origem, destino)
+        enviar_para_s3(
+            destino,
+            f"gold/{id_empresa}/{nome_sanitizado}/{nome_arquivo}",
+            camada="gold",
+        )
 
-    print(f"Pasta da empresa: {pasta_destino}")
+    return pasta_destino
 
 
-def main():
-    arquivo_origem = "1-all-collected.csv"
+def main(id_empresa):
+    if id_empresa is None:
+        raise ValueError("Informe o ID da empresa para gerar a camada Gold.")
 
-    try:
-        id_empresa = extrair_id(arquivo_origem)
-        nome_empresa = buscar_empresa(id_empresa)
-
-        print(f"ID da empresa: {id_empresa}")
-        print(f"Nome da empresa: {nome_empresa}")
-
-        criar_pasta(nome_empresa)
-
-        print("Processo finalizado.")
-
-    except mysql.connector.Error as erro:
-        print(f"Erro no MySQL: {erro}")
-
-    except (ValueError, OSError) as erro:
-        print(f"Erro: {erro}")
+    nome_empresa = buscar_empresa(id_empresa)
+    pasta_destino = criar_pasta(id_empresa, nome_empresa)
+    print(f"Camada Gold gerada para {nome_empresa}: {pasta_destino}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--company-id", type=int, required=True)
+    argumentos = parser.parse_args()
+    main(argumentos.company_id)

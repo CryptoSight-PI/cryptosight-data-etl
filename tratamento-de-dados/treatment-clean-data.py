@@ -1,15 +1,15 @@
+import argparse
+from pathlib import Path
+
 import pandas as pd
-import os
-from s3_utils import enviar_para_s3  # função que envia arquivos ao S3
 
-PASTA_CSV = os.path.join(".", "Csv")
-PASTA_SILVER = os.path.join(".", "Silver")
+from s3_utils import enviar_para_s3
 
-os.makedirs(PASTA_SILVER, exist_ok=True)
 
-arquivo_csv = os.path.join(PASTA_CSV, "all-collected.csv")
-
-clean_columns = [
+ROOT_DIR = Path(__file__).resolve().parent.parent
+PASTA_CSV = ROOT_DIR / "Csv"
+PASTA_SILVER = ROOT_DIR / "Silver"
+CLEAN_COLUMNS = [
     "cpu_percent",
     "cpu_frequency",
     "ram_percent",
@@ -18,38 +18,51 @@ clean_columns = [
     "swap_memory_percent",
     "upload_speed",
     "download_speed",
-    "timestamp"
+    "timestamp",
 ]
 
-df = pd.read_csv(arquivo_csv, sep=";")
 
-filtro_nulas = (
-    df[clean_columns].isnull()
-    | (df[clean_columns] == 0)
-).any(axis=1)
+def main(id_empresa):
+    arquivo_csv = PASTA_CSV / "all-collected.csv"
+    if not arquivo_csv.is_file():
+        raise FileNotFoundError(f"CSV raw consolidado não encontrado: {arquivo_csv}")
 
-lines_null = df.loc[filtro_nulas]
+    PASTA_SILVER.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(arquivo_csv, sep=";")
+    colunas_ausentes = [coluna for coluna in CLEAN_COLUMNS if coluna not in df.columns]
+    if colunas_ausentes:
+        raise ValueError(
+            "O CSV de entrada não contém as colunas esperadas: "
+            + ", ".join(colunas_ausentes)
+        )
 
-caminho_nulos = os.path.join(PASTA_SILVER, "dados_nulos.csv")
+    filtro_nulas = (
+        df[CLEAN_COLUMNS].isnull()
+        | (df[CLEAN_COLUMNS] == 0)
+    ).any(axis=1)
 
-lines_null.to_csv(
-    caminho_nulos,
-    sep=";",
-    index=False
-)
+    caminho_nulos = PASTA_SILVER / "dados_nulos.csv"
+    df.loc[filtro_nulas].to_csv(caminho_nulos, sep=";", index=False)
 
-df_filtrado = df.loc[~filtro_nulas].copy()
+    caminho_limpos = PASTA_SILVER / "clean_data.csv"
+    df.loc[~filtro_nulas].to_csv(caminho_limpos, sep=";", index=False)
 
-caminho_limpos = os.path.join(PASTA_SILVER, "clean_data.csv")
+    print(f"Tratamento concluído. Arquivos salvos em {PASTA_SILVER}.")
+    prefixo = f"trusted/{id_empresa}/"
+    enviar_para_s3(
+        caminho_nulos,
+        f"{prefixo}dados_nulos.csv",
+        camada="trusted",
+    )
+    enviar_para_s3(
+        caminho_limpos,
+        f"{prefixo}clean_data.csv",
+        camada="trusted",
+    )
 
-df_filtrado.to_csv(
-    caminho_limpos,
-    sep=";",
-    index=False
-)
 
-print("Tratamento concluído. Arquivos salvos na pasta Silver.")
-
-# Envia os dois arquivos para a camada silver do bucket
-enviar_para_s3(caminho_nulos, "silver/dados_nulos.csv")
-enviar_para_s3(caminho_limpos, "silver/clean_data.csv")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--company-id", type=int, required=True)
+    argumentos = parser.parse_args()
+    main(argumentos.company_id)

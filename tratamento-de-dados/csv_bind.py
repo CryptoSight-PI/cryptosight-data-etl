@@ -1,46 +1,44 @@
+from pathlib import Path
+
 import pandas as pd
-import glob
-import time
-import os
-from s3_utils import enviar_para_s3  # função que envia arquivos ao S3
 
-PASTA_CSV = os.path.join(".", "Csv")
+from s3_utils import enviar_para_s3
 
-while True:
-    arquivos_csv = glob.glob(os.path.join(PASTA_CSV, "*.csv"))
 
-    
-    arquivos_csv = [
-        arquivo for arquivo in arquivos_csv
-        if os.path.basename(arquivo) != "all-collected.csv"
-    ]
+ROOT_DIR = Path(__file__).resolve().parent.parent
+PASTA_CSV = ROOT_DIR / "Csv"
+
+
+def main():
+    PASTA_CSV.mkdir(parents=True, exist_ok=True)
+    arquivos_csv = sorted(
+        arquivo
+        for arquivo in PASTA_CSV.glob("*.csv")
+        if arquivo.name != "all-collected.csv"
+    )
 
     if not arquivos_csv:
-        print("Nenhum arquivo CSV encontrado!")
+        print("Nenhum CSV local para enviar; será usada a camada raw existente no S3.")
+        return
 
-    else:
-        dataframes = [
-            pd.read_csv(arquivo, sep=";")
-            for arquivo in arquivos_csv
-        ]
+    dataframes = []
+    for arquivo in arquivos_csv:
+        if "_processos_" in arquivo.name:
+            prefixo = "raw/processes/"
+        else:
+            prefixo = "raw/metrics/"
+            dataframes.append(pd.read_csv(arquivo, sep=";"))
 
+        enviar_para_s3(arquivo, f"{prefixo}{arquivo.name}", camada="raw")
+
+    if dataframes:
         final_csv = pd.concat(dataframes, ignore_index=True)
+        caminho_final = PASTA_CSV / "all-collected.csv"
+        final_csv.to_csv(caminho_final, sep=";", index=False)
+        print(f"{len(dataframes)} arquivos de métricas unificados em {caminho_final}.")
+    else:
+        print("Nenhum CSV de métricas encontrado para unificação.")
 
-        caminho_final = os.path.join(PASTA_CSV, "all-collected.csv")
 
-        final_csv.to_csv(
-            caminho_final,
-            sep=";",
-            index=False
-        )
-
-        print(f"{len(arquivos_csv)} arquivos unificados.")
-
-        # Envia o CSV unificado para a camada bronze do bucket
-        try:
-            enviar_para_s3(caminho_final, "bronze/all-collected.csv")
-        except Exception as erro:
-            # se falhar, mostra o erro mas o loop continua rodando
-            print(f"Erro ao enviar para o S3: {erro}")
-
-    time.sleep(60)
+if __name__ == "__main__":
+    main()
