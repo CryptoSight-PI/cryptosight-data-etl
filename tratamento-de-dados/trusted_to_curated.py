@@ -83,7 +83,6 @@ def buscar_empresa(id_empresa):
 #     return pasta_destino
 
 def sanitizar_nome(nome_empresa):
-    """Remove caracteres inválidos do nome usado no caminho S3."""
     nome = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip(" .")
 
     if not nome:
@@ -101,15 +100,6 @@ def sanitizar_nome(nome_empresa):
 #     print(f"Camada Gold gerada para {nome_empresa}: {pasta_destino}")
 
 def main(id_empresa, dia):
-    """
-    Silver -> Gold para uma empresa e uma data.
-
-    Origem:
-        bucket Silver / ID_EMPRESA / AAAA/MM/DD / arquivo
-
-    Destino:
-        bucket Gold / ID_EMPRESA / NOME_EMPRESA / arquivo
-    """
     if not bucket_silver or not bucket_gold:
         raise ValueError(
             "Configure AWS_BUCKET_SILVER/AWS_BUCKET_TRUSTED "
@@ -124,7 +114,6 @@ def main(id_empresa, dia):
     for nome_arquivo in ARQUIVOS:
         chave_origem = f"{prefixo_silver}/{nome_arquivo}"
 
-        # Confirma que o arquivo de origem existe e lê seu conteúdo.
         resposta = s3.get_object(
             Bucket=bucket_silver,
             Key=chave_origem,

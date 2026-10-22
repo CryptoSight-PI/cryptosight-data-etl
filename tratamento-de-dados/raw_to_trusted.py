@@ -69,7 +69,6 @@ def ler_csv_s3(chave):
     )
 
 def csv_em_memoria(df):
-    """Gera o conteúdo CSV sem criar arquivo local."""
     buffer = io.StringIO()
 
     df.to_csv(
@@ -200,7 +199,6 @@ def main(id_empresa, arquivos_empresa, dia):
             f"Nenhum CSV encontrado para a empresa {id_empresa}."
         )
 
-    # Consolida todos os CSVs da empresa em memória.
     dataframes = [
         ler_csv_s3(chave)
         for chave in arquivos_empresa
@@ -211,23 +209,18 @@ def main(id_empresa, arquivos_empresa, dia):
         ignore_index=True,
     )
 
-    # Mantém as regras originais de limpeza.
     limpos, nulos = separar_validos(dados)
 
-    # Mantém a partição por empresa e data.
     prefixo = f"{id_empresa}/{particao(dia)}"
 
-    # Gera os CSVs em memória.
     conteudo_limpo = csv_em_memoria(limpos)
     conteudo_nulos = csv_em_memoria(nulos)
 
-    # Gera o JSON a partir do CSV limpo, como no código original.
     conteudo_json = csv_to_json(
         conteudo_limpo,
         id_empresa,
     )
 
-    # Grava os três arquivos no bucket Silver.
     salvar_s3(
         f"{prefixo}/clean_data.csv",
         conteudo_limpo,

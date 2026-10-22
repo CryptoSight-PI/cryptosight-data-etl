@@ -89,18 +89,11 @@ def agrupar_por_empresa(arquivos):
 
     return arquivos_por_empresa
 
+
+
 PREFIXO_RAW_METRICS = "metrics"
 
 def listar_arquivos_raw(dia):
-    """
-    Lista os CSVs de métricas da data informada no bucket Bronze.
-    Não baixa arquivos para o computador.
-    """
-    if not bucket_bronze:
-        raise ValueError(
-            "Configure AWS_BUCKET_BRONZE ou AWS_BUCKET_RAW."
-        )
-
     prefixo = f"{PREFIXO_RAW_METRICS}/{particao(dia)}/"
 
     paginator = s3.get_paginator("list_objects_v2")
@@ -117,7 +110,6 @@ def listar_arquivos_raw(dia):
             if not nome.lower().endswith(".csv"):
                 continue
 
-            # Mantém a exclusão dos CSVs de processos.
             if "_processos_" in nome.lower():
                 continue
 
@@ -127,11 +119,6 @@ def listar_arquivos_raw(dia):
 
 
 def arquivar_arquivo(chave):
-    """
-    Arquiva o CSV no mesmo bucket Bronze, preservando sua chave
-    original abaixo do prefixo processados/.
-    """
-    destino = f"processados/{chave}"
 
     s3.copy_object(
         Bucket=bucket_bronze,
@@ -139,7 +126,7 @@ def arquivar_arquivo(chave):
             "Bucket": bucket_bronze,
             "Key": chave,
         },
-        Key=destino,
+        Key=f"processados/{chave}",
     )
 
     s3.delete_object(
@@ -158,7 +145,6 @@ def main():
         f"para {data_particao}."
     )
 
-    # 1. Busca os CSVs da partição diária no Bronze.
     arquivos_raw = listar_arquivos_raw(dia)
 
     if not arquivos_raw:
@@ -169,7 +155,6 @@ def main():
         )
         return
 
-    # 2. Agrupa as chaves S3 pelo ID da empresa.
     arquivos_por_empresa = agrupar_por_empresa(arquivos_raw)
 
     if not arquivos_por_empresa:
@@ -178,7 +163,6 @@ def main():
         )
         return
 
-    # 3. Processa uma empresa por vez, na ordem original.
     for id_empresa, arquivos_empresa in sorted(
         arquivos_por_empresa.items()
     ):
@@ -188,22 +172,17 @@ def main():
         )
 
         try:
-            # Bronze -> Silver:
-            # consolida em memória, limpa e gera CSVs e JSON.
             raw_to_trusted(
                 id_empresa=id_empresa,
                 arquivos_empresa=arquivos_empresa,
                 dia=dia,
             )
 
-            # Silver -> Gold:
-            # consulta o nome da empresa pelo cursor global.
             trusted_to_curated(
                 id_empresa=id_empresa,
                 dia=dia,
             )
 
-            # 4. Só arquiva as entradas após as duas etapas concluírem.
             for chave in arquivos_empresa:
                 arquivar_arquivo(chave)
 
