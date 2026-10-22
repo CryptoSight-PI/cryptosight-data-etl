@@ -34,22 +34,46 @@ import pandas as pd
 # )
 
 # from .config import baixar_arquivos_s3, enviar_para_s3
-
+COMPONENTE_COLUNAS = {
+    "cpu":         ["cpu_percent", "cpu_frequency"],
+    "ram":         ["ram_percent"],
+    "swap":        ["swap_memory_total", "swap_memory_used", "swap_memory_percent"],
+    "rede":        ["upload_speed", "download_speed"],
+    "temperatura": ["temperature"],
+    "ventoinha":   ["fans_speed"],
+    "disco":       ["disk"],
+    "gpu":         ["gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed"],
+}
 
 NUMERICAS = [
-    "cpu_percent",
-    "cpu_frequency",
-    "ram_percent",
-    "swap_memory_total",
-    "swap_memory_used",
-    "swap_memory_percent",
-    "upload_speed",
-    "download_speed",
+    "cpu_percent", "cpu_frequency", "ram_percent",
+    "swap_memory_total", "swap_memory_used", "swap_memory_percent",
+    "upload_speed", "download_speed", "temperature", "fans_speed", "disk",
+    "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed",
 ]
-OBRIGATORIAS = NUMERICAS + ["timestamp"]
+OBRIGATORIAS = ["timestamp"]
 
 
 NAO_ZERO = ["cpu_percent", "cpu_frequency", "ram_percent"]
+
+def buscar_monitorados(id_empresa):
+    cursor.execute(""" select m.mac_address, c.nome, mc.monitorado from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente
+        where e.id = %s
+        """,
+        (id_empresa,),
+    )
+
+    monitorados = {}
+    for mac, nome, monitorado in cursor.fetchall():
+        status = 1 if monitorado in (1, True) else 0
+        maccerto = str(mac).strip().lower().replace("-", ":")
+        if maccerto not in monitorados:
+            monitorados[maccerto] = {}
+
+        monitorados[maccerto][nome.lower()] = status
+
+    return monitorados   
+
 
 def particao(dia):
     """date -> '2026/10/21'"""
@@ -138,22 +162,36 @@ def buscar_empresa(id_empresa):
 #     )
 
 
-def separar_validos(df):
-
-    ausentes = [c for c in OBRIGATORIAS if c not in df.columns]
-    if ausentes:
-        raise ValueError(
-            "O CSV de entrada não contém as colunas esperadas: " + ", ".join(ausentes)
-        )
+def separar_validos(df, monitorados):
+    if "timestamp" not in df.columns:
+        raise ValueError("O CSV de entrada não contém a coluna timestamp")
 
     df = df.copy()
+
+    for coluna in NUMERICAS: 
+        if coluna not in df.columns:
+            df[coluna] = pd.NA
 
     df[NUMERICAS] = df[NUMERICAS].apply(pd.to_numeric, errors="coerce")
     df["timestamp"] = df["timestamp"].replace("", pd.NA)
 
-    invalida = df[OBRIGATORIAS].isnull().any(axis=1) | (df[NAO_ZERO] == 0).any(axis=1)
-    return df.loc[~invalida], df.loc[invalida]
+    mask = pd.DataFrame(False, index=df.index, columns=NUMERICAS)
+    for mac, grupo in df.groupby("user"):
+        comps = monitorados.get(str(mac).strip().lower().replace("-", ":") , {})
+        colunas = []
 
+        for componente , colunas_do_componente in COMPONENTE_COLUNAS.items():
+            if comps.get(componente) == 1:
+                for i in colunas_do_componente:
+                    colunas.append(i)
+        mask.loc[grupo.index , colunas] = True
+            
+
+    nulo_monitorado = (df[NUMERICAS].isnull() & mask).any(axis=1)
+    zero_monitorado = ((df[NAO_ZERO] == 0) & mask[NAO_ZERO]).any(axis=1)
+
+    invalida = nulo_monitorado | zero_monitorado | df["timestamp"].isnull()
+    return df.loc[~invalida], df.loc[invalida]
 
 def csv_to_json(conteudo_csv, id_empresa):
     texto = conteudo_csv.decode("utf-8")
@@ -209,7 +247,9 @@ def main(id_empresa, arquivos_empresa, dia):
         ignore_index=True,
     )
 
-    limpos, nulos = separar_validos(dados)
+    monitorados = buscar_monitorados(id_empresa)
+
+    limpos, nulos = separar_validos(dados , monitorados)
 
     prefixo = f"{id_empresa}/{particao(dia)}"
 
