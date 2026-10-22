@@ -28,94 +28,197 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from etl.config import (
-    PASTA_CSV,
-    PASTA_RAW,
-    PREFIXO_RAW_METRICS,
-    PREFIXO_RAW_PROCESSES,
-    baixar_arquivos_s3,
-    enviar_para_s3,
-    particao,
-)
-from etl.raw_to_trusted import main as raw_to_trusted
-from etl.trusted_to_curated import main as trusted_to_curated
+# from config import (
+#     PASTA_CSV,
+#     PASTA_RAW,
+#     PREFIXO_RAW_METRICS,
+#     PREFIXO_RAW_PROCESSES,
+#     baixar_arquivos_s3,
+#     enviar_para_s3,
+#     particao,
+# )
+from raw_to_trusted import main as raw_to_trusted
+from trusted_to_curated import main as trusted_to_curated
+from configenvironment import s3 , bucket_silver , bucket_gold , bucket_bronze , cursor
+from raw_to_trusted import particao
 
 
-def enviar_csvs_locais(dia):
+# def enviar_csvs_locais(dia):
 
-    PASTA_CSV.mkdir(parents=True, exist_ok=True)
-    arquivos = sorted(
-        a for a in PASTA_CSV.glob("*.csv") if a.name != "all-collected.csv"
-    )
+#     PASTA_CSV.mkdir(parents=True, exist_ok=True)
+#     arquivos = sorted(
+#         a for a in PASTA_CSV.glob("*.csv") if a.name != "all-collected.csv"
+#     )
 
-    if not arquivos:
-        print("Nenhum CSV local para enviar; será usada a camada raw existente no S3.")
-        return
+#     if not arquivos:
+#         print("Nenhum CSV local para enviar; será usada a camada raw existente no S3.")
+#         return
 
-    for arquivo in arquivos:
-        base = (
-            PREFIXO_RAW_PROCESSES
-            if "_processos_" in arquivo.name
-            else PREFIXO_RAW_METRICS
-        )
-        enviar_para_s3(arquivo, f"{base}/{particao(dia)}/{arquivo.name}", camada="raw")
+#     for arquivo in arquivos:
+#         base = (
+#             PREFIXO_RAW_PROCESSES
+#             if "_processos_" in arquivo.name
+#             else PREFIXO_RAW_METRICS
+#         )
+#         enviar_para_s3(arquivo, f"{base}/{particao(dia)}/{arquivo.name}", camada="raw")
 
 
 
-def _agrupar_por_empresa(arquivos):
+def agrupar_por_empresa(arquivos):
     arquivos_por_empresa = {}
     arquivos_sem_id = []
-    for arquivo in arquivos:
-        resultado = re.match(r"^(\d+)[-_]", arquivo.name)
+
+    for chave in arquivos:
+        nome = chave.rsplit("/", 1)[-1]
+        resultado = re.match(r"^(\d+)[-_]", nome)
+
         if resultado:
             id_empresa = int(resultado.group(1))
-            arquivos_por_empresa.setdefault(id_empresa, []).append(arquivo)
+            arquivos_por_empresa.setdefault(id_empresa, []).append(chave)
         else:
-            arquivos_sem_id.append(arquivo.name)
+            arquivos_sem_id.append(nome)
 
     if arquivos_sem_id:
         raise ValueError(
-            "Não foi possível identificar o ID da empresa nestes CSVs raw: "
+            "Não foi possível identificar o ID da empresa nestes CSVs: "
             + ", ".join(arquivos_sem_id)
         )
+
     if not arquivos_por_empresa:
-        raise ValueError("Nenhum ID de empresa foi encontrado nos CSVs raw.")
+        raise ValueError("Nenhum ID de empresa foi encontrado nos CSVs.")
+
     return arquivos_por_empresa
+
+PREFIXO_RAW_METRICS = "metrics"
+
+def listar_arquivos_raw(dia):
+    """
+    Lista os CSVs de métricas da data informada no bucket Bronze.
+    Não baixa arquivos para o computador.
+    """
+    if not bucket_bronze:
+        raise ValueError(
+            "Configure AWS_BUCKET_BRONZE ou AWS_BUCKET_RAW."
+        )
+
+    prefixo = f"{PREFIXO_RAW_METRICS}/{particao(dia)}/"
+
+    paginator = s3.get_paginator("list_objects_v2")
+    arquivos = []
+
+    for pagina in paginator.paginate(
+        Bucket=bucket_bronze,
+        Prefix=prefixo,
+    ):
+        for objeto in pagina.get("Contents", []):
+            chave = objeto["Key"]
+            nome = chave.rsplit("/", 1)[-1]
+
+            if not nome.lower().endswith(".csv"):
+                continue
+
+            # Mantém a exclusão dos CSVs de processos.
+            if "_processos_" in nome.lower():
+                continue
+
+            arquivos.append(chave)
+
+    return arquivos
+
+
+def arquivar_arquivo(chave):
+    """
+    Arquiva o CSV no mesmo bucket Bronze, preservando sua chave
+    original abaixo do prefixo processados/.
+    """
+    destino = f"processados/{chave}"
+
+    s3.copy_object(
+        Bucket=bucket_bronze,
+        CopySource={
+            "Bucket": bucket_bronze,
+            "Key": chave,
+        },
+        Key=destino,
+    )
+
+    s3.delete_object(
+        Bucket=bucket_bronze,
+        Key=chave,
+    )
+
 
 
 def main():
-    enviar_csvs_locais(date.today())
+    dia = date.today()
+    data_particao = particao(dia)
 
-    arquivos_raw = baixar_arquivos_s3(
-        "raw",
-        "metrics/",
-        PASTA_RAW,
+    print(
+        f"Iniciando pipeline Raw -> Trusted -> Curated "
+        f"para {data_particao}."
     )
+
+    # 1. Busca os CSVs da partição diária no Bronze.
+    arquivos_raw = listar_arquivos_raw(dia)
+
     if not arquivos_raw:
-        raise RuntimeError(
-            "Nenhum CSV de métricas foi encontrado em raw/metrics/ no bucket Raw."
-        )
-
-    PASTA_CSV.mkdir(parents=True, exist_ok=True)
-    arquivos_por_empresa = _agrupar_por_empresa(arquivos_raw)
-    for id_empresa, arquivos_empresa in sorted(arquivos_por_empresa.items()):
-
-        dataframes = [pd.read_csv(arquivo, sep=";") for arquivo in arquivos_empresa]
-        caminho_consolidado = PASTA_CSV / "all-collected.csv"
-        pd.concat(dataframes, ignore_index=True).to_csv(
-            caminho_consolidado,
-            sep=";",
-            index=False,
-        )
         print(
-            f"Empresa {id_empresa}: {len(arquivos_empresa)} CSVs raw "
-            f"consolidados em {caminho_consolidado}."
+            f"Nenhum CSV de métricas encontrado em "
+            f"{PREFIXO_RAW_METRICS}/{data_particao}/ "
+            f"no bucket Bronze."
+        )
+        return
+
+    # 2. Agrupa as chaves S3 pelo ID da empresa.
+    arquivos_por_empresa = agrupar_por_empresa(arquivos_raw)
+
+    if not arquivos_por_empresa:
+        print(
+            "Nenhuma empresa válida encontrada nos nomes dos CSVs."
+        )
+        return
+
+    # 3. Processa uma empresa por vez, na ordem original.
+    for id_empresa, arquivos_empresa in sorted(
+        arquivos_por_empresa.items()
+    ):
+        print(
+            f"\nEmpresa {id_empresa}: "
+            f"{len(arquivos_empresa)} CSV(s) encontrados."
         )
 
-        raw_to_trusted(id_empresa)       # = treatment-clean-data.py + silver.py (JSON)
-        trusted_to_curated(id_empresa)   # = gold_file.py
+        try:
+            # Bronze -> Silver:
+            # consolida em memória, limpa e gera CSVs e JSON.
+            raw_to_trusted(
+                id_empresa=id_empresa,
+                arquivos_empresa=arquivos_empresa,
+                dia=dia,
+            )
 
-    print("Pipeline concluído: Raw -> Trusted -> Gold para todas as empresas.")
+            # Silver -> Gold:
+            # consulta o nome da empresa pelo cursor global.
+            trusted_to_curated(
+                id_empresa=id_empresa,
+                dia=dia,
+            )
+
+            # 4. Só arquiva as entradas após as duas etapas concluírem.
+            for chave in arquivos_empresa:
+                arquivar_arquivo(chave)
+
+            print(
+                f"Empresa {id_empresa} concluída para "
+                f"{data_particao}."
+            )
+
+        except Exception as erro:
+            print(
+                f"Erro ao processar empresa {id_empresa}: {erro}"
+            )
+
+    print("\nPipeline finalizado.")
+
 
 
 if __name__ == "__main__":

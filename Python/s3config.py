@@ -26,7 +26,7 @@ def mandars3(data , arquivo):
 
     nome_arquivo = os.path.basename(arquivo)
     camada = "processes" if "_processos_" in nome_arquivo else "metrics"
-    caminho = f"raw/{camada}/{ano}/{mes}/{dia}/{nome_arquivo}"
+    caminho = f"{camada}/{ano}/{mes}/{dia}/{nome_arquivo}"
     s3.upload_file(arquivo, bucket_bronze, caminho)
     print(f"Enviado para s3://{bucket_bronze}/{caminho}")
     return caminho

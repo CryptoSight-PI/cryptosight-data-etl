@@ -3,14 +3,13 @@ from pathlib import Path, PurePosixPath
 
 import boto3
 from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv()) 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT_DIR / ".env", override=True)  
-
-PASTA_CSV = ROOT_DIR / "csv"
-PASTA_RAW = ROOT_DIR / "raw"
-PASTA_SILVER = ROOT_DIR / "silver"
-PASTA_GOLD = ROOT_DIR / "gold"
+# PASTA_CSV = ROOT_DIR / "csv"
+# PASTA_RAW = ROOT_DIR / "raw"
+# PASTA_SILVER = ROOT_DIR / "silver"
+# PASTA_GOLD = ROOT_DIR / "gold"
 
 PREFIXO_RAW_METRICS = "metrics"
 PREFIXO_RAW_PROCESSES = "processes"
