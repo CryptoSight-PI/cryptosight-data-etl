@@ -89,7 +89,7 @@ def criar_pasta(nome_empresa):
             print(f"Arquivo movido: {origem} -> {destino}")
 
             # Envia para a camada gold do bucket, dentro da pasta da empresa
-            enviar_para_s3(destino, f"gold/{nome_pasta}/{arquivo}")
+            enviar_para_s3(destino, f"{nome_pasta}/{arquivo}")
 
             # Só chega aqui se o envio deu certo (se falhar, o erro para antes)
             os.remove(destino)  # apaga o arquivo da máquina local

@@ -70,7 +70,7 @@ def criar_pasta(id_empresa, nome_empresa):
         shutil.copy2(origem, destino)
         enviar_para_s3(
             destino,
-            f"gold/{id_empresa}/{nome_sanitizado}/{nome_arquivo}",
+            f"{id_empresa}/{nome_sanitizado}/{nome_arquivo}",
             camada="gold",
         )
 

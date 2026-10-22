@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from csv_bind import main as enviar_csvs_locais
-from s3_utils import baixar_arquivos_s3
+from etl.csv_bind import main as enviar_csvs_locais
+from etl.s3_utils import baixar_arquivos_s3
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -41,7 +41,7 @@ def main():
 
     arquivos_raw = baixar_arquivos_s3(
         "raw",
-        "raw/metrics/",
+        "metrics/",
         PASTA_RAW,
     )
     if not arquivos_raw:
