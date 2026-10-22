@@ -93,8 +93,10 @@ def agrupar_por_empresa(arquivos):
 
 PREFIXO_RAW_METRICS = "metrics"
 
-def listar_arquivos_raw(dia):
-    prefixo = f"{PREFIXO_RAW_METRICS}/{particao(dia)}/"
+# se for do dia coloca prefixo dia
+def listar_arquivos_raw():
+    # prefixo = f"{PREFIXO_RAW_METRICS}/{particao(dia)}/"
+    prefixo = "metrics/"
 
     paginator = s3.get_paginator("list_objects_v2")
     arquivos = []
@@ -136,69 +138,119 @@ def arquivar_arquivo(chave):
 
 
 
+# def main():
+#     dia = date.today()
+#     data_particao = particao(dia)
+
+#     print(
+#         f"Iniciando pipeline Raw -> Trusted -> Curated "
+#         f"para {data_particao}."
+#     )
+
+#     arquivos_raw = listar_arquivos_raw(dia)
+
+#     if not arquivos_raw:
+#         print(
+#             f"Nenhum CSV de métricas encontrado em "
+#             f"{PREFIXO_RAW_METRICS}/{data_particao}/ "
+#             f"no bucket Bronze."
+#         )
+#         return
+
+#     arquivos_por_empresa = agrupar_por_empresa(arquivos_raw)
+
+#     if not arquivos_por_empresa:
+#         print(
+#             "Nenhuma empresa válida encontrada nos nomes dos CSVs."
+#         )
+#         return
+
+#     for id_empresa, arquivos_empresa in sorted(
+#         arquivos_por_empresa.items()
+#     ):
+#         print(
+#             f"\nEmpresa {id_empresa}: "
+#             f"{len(arquivos_empresa)} CSV(s) encontrados."
+#         )
+
+#         try:
+#             raw_to_trusted(
+#                 id_empresa=id_empresa,
+#                 arquivos_empresa=arquivos_empresa,
+#                 dia=dia,
+#             )
+
+#             trusted_to_curated(
+#                 id_empresa=id_empresa,
+#                 dia=dia,
+#             )
+
+#             for chave in arquivos_empresa:
+#                 arquivar_arquivo(chave)
+
+#             print(
+#                 f"Empresa {id_empresa} concluída para "
+#                 f"{data_particao}."
+#             )
+
+#         except Exception as erro:
+#             print(
+#                 f"Erro ao processar empresa {id_empresa}: {erro}"
+#             )
+
+#     print("\nPipeline finalizado.")
+
+
+
+# agrupamento por data ou seja nao é do dia
 def main():
-    dia = date.today()
-    data_particao = particao(dia)
+    arquivos = listar_arquivos_raw()
 
-    print(
-        f"Iniciando pipeline Raw -> Trusted -> Curated "
-        f"para {data_particao}."
-    )
-
-    arquivos_raw = listar_arquivos_raw(dia)
-
-    if not arquivos_raw:
-        print(
-            f"Nenhum CSV de métricas encontrado em "
-            f"{PREFIXO_RAW_METRICS}/{data_particao}/ "
-            f"no bucket Bronze."
-        )
+    if not arquivos:
+        print("Nenhum arquivo pendente encontrado.")
         return
 
-    arquivos_por_empresa = agrupar_por_empresa(arquivos_raw)
+    
+    arquivos_por_data = {}
 
-    if not arquivos_por_empresa:
-        print(
-            "Nenhuma empresa válida encontrada nos nomes dos CSVs."
-        )
-        return
+    for chave in arquivos:
+        partes = chave.split("/")
 
-    for id_empresa, arquivos_empresa in sorted(
-        arquivos_por_empresa.items()
-    ):
-        print(
-            f"\nEmpresa {id_empresa}: "
-            f"{len(arquivos_empresa)} CSV(s) encontrados."
-        )
+        # metrics/AAAA/MM/DD/arquivo.csv
+        if len(partes) < 5:
+            print(f"Caminho ignorado por formato inválido: {chave}")
+            continue
 
         try:
-            raw_to_trusted(
-                id_empresa=id_empresa,
-                arquivos_empresa=arquivos_empresa,
-                dia=dia,
+            dia = date(int(partes[1]), int(partes[2]), int(partes[3])
             )
+        except ValueError:
+            print(f"Data inválida no caminho: {chave}")
+            continue
 
-            trusted_to_curated(
-                id_empresa=id_empresa,
-                dia=dia,
-            )
+        arquivos_por_data.setdefault(dia, []).append(chave)
 
-            for chave in arquivos_empresa:
-                arquivar_arquivo(chave)
+    for dia, arquivos_dia in sorted(arquivos_por_data.items()):
+        arquivos_por_empresa = agrupar_por_empresa(arquivos_dia)
 
-            print(
-                f"Empresa {id_empresa} concluída para "
-                f"{data_particao}."
-            )
+        for id_empresa, arquivos_empresa in sorted(
+            arquivos_por_empresa.items()
+        ):
+            try:
+                raw_to_trusted(id_empresa, arquivos_empresa, dia)
+                trusted_to_curated(id_empresa, dia)
 
-        except Exception as erro:
-            print(
-                f"Erro ao processar empresa {id_empresa}: {erro}"
-            )
+                for chave in arquivos_empresa:
+                    arquivar_arquivo(chave)
 
-    print("\nPipeline finalizado.")
+            except Exception as erro:
+                print(
+                    f"Erro na empresa {id_empresa}, "
+                    f"data {dia}: {erro}"
+                )
+                continue
 
-
+    print("Pipeline finalizado.")
 
 if __name__ == "__main__":
     main()
