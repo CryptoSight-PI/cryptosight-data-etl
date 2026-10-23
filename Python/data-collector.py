@@ -26,15 +26,25 @@ intervalo_csv = 60
 user = get_mac_address()
 
 
+# def get_fan_speeds():
+#     if not hasattr(psutil, "sensors_fans"):
+#         return {}
+#     result = {}
+#     for chip, fans in psutil.sensors_fans().items():
+#         for fan in fans:
+#             result[fan.label] = fan.current
+#     return result
+
+RPM_MAX = 5200
+
 def get_fan_speeds():
     if not hasattr(psutil, "sensors_fans"):
         return {}
     result = {}
     for chip, fans in psutil.sensors_fans().items():
         for fan in fans:
-            result[fan.label] = fan.current
+            result[fan.label] = min(100.0, fan.current / RPM_MAX * 100)
     return result
-
 
 speeds = get_fan_speeds()
 
@@ -195,8 +205,8 @@ def capture(components):
                         gpu_energy.append(None)
 
                     try:
-                        fan = pynvml.nvmlDeviceGetFanSpeed(handle)
-                        gpu_fan_speed.append(fan)
+                        fan = speeds.get("gpu_fan")
+                        gpu_fan_speed.append(round(fan, 0))
                     except pynvml.NVMLError:
                         gpu_fan_speed.append(None)
 
