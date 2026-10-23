@@ -235,6 +235,11 @@ def separar_validos(df, monitorados):
     nulo_monitorado = (df[NUMERICAS].isnull() & mask).any(axis=1)
     zero_monitorado = ((df[NAO_ZERO] == 0) & mask[NAO_ZERO]).any(axis=1)
 
+    print("Descartadas por nulo:", nulo_monitorado.sum())
+    print("Descartadas por zero:", zero_monitorado.sum())
+    print("\nNulas e monitoradas, por coluna:")
+    print((df[NUMERICAS].isnull() & mask).sum())
+    print("\nValores de ram_percent:", df["ram_percent"].unique())
     invalida = nulo_monitorado | zero_monitorado | df["timestamp"].isnull()
     return df.loc[~invalida], df.loc[invalida]
 
