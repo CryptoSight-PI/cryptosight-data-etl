@@ -54,7 +54,8 @@ NUMERICAS = [
 OBRIGATORIAS = ["timestamp"]
 
 
-NAO_ZERO = ["cpu_percent", "cpu_frequency", "ram_percent"]
+# NAO_ZERO = ["cpu_percent"]
+NAO_ZERO = ["ram_percent"]
 
 def buscar_monitorados(id_empresa):
     cursor.execute(""" select m.mac_address, c.nome, mc.monitorado from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente
@@ -190,6 +191,11 @@ def separar_validos(df, monitorados):
     nulo_monitorado = (df[NUMERICAS].isnull() & mask).any(axis=1)
     zero_monitorado = ((df[NAO_ZERO] == 0) & mask[NAO_ZERO]).any(axis=1)
 
+    print("Descartadas por nulo:", nulo_monitorado.sum())
+    print("Descartadas por zero:", zero_monitorado.sum())
+    print("\nNulas e monitoradas, por coluna:")
+    print((df[NUMERICAS].isnull() & mask).sum())
+    print("\nValores de ram_percent:", df["ram_percent"].unique())
     invalida = nulo_monitorado | zero_monitorado | df["timestamp"].isnull()
     return df.loc[~invalida], df.loc[invalida]
 
