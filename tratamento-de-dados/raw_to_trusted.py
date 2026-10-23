@@ -55,6 +55,9 @@ OBRIGATORIAS = ["timestamp"]
 
 
 NAO_ZERO = ["cpu_percent", "cpu_frequency", "ram_percent"]
+VETOR_NAO_ZERO = ["gpu_temp"]
+
+COLUNAS_VETOR = ["gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed"]
 
 def buscar_monitorados(id_empresa):
     cursor.execute(""" select m.mac_address, c.nome, mc.monitorado from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente
@@ -161,6 +164,22 @@ def buscar_empresa(id_empresa):
 #         f"consolidados em {caminho_consolidado}."
 #     )
 
+def vetor_valido(texto):
+    for i in str(texto).strip("[] ").split(","):
+        try:
+            numero = float(i)
+        except ValueError:
+            return False
+        if numero != numero:   
+            return False
+    return True
+
+def vetor_sem_zero(texto):
+    for i in str(texto).strip("[] ").split(","):
+        if i.strip() in ("0" , "0.0"):
+            return False
+    return True
+
 
 def separar_validos(df, monitorados):
     if "timestamp" not in df.columns:
@@ -172,19 +191,45 @@ def separar_validos(df, monitorados):
         if coluna not in df.columns:
             df[coluna] = pd.NA
 
-    df[NUMERICAS] = df[NUMERICAS].apply(pd.to_numeric, errors="coerce")
+    escalares = [c for c in NUMERICAS if c not in COLUNAS_VETOR]
+    df[escalares] = df[escalares].apply(pd.to_numeric, errors="coerce")
+
     df["timestamp"] = df["timestamp"].replace("", pd.NA)
 
     mask = pd.DataFrame(False, index=df.index, columns=NUMERICAS)
     for mac, grupo in df.groupby("user"):
         comps = monitorados.get(str(mac).strip().lower().replace("-", ":") , {})
         colunas = []
-
+    
         for componente , colunas_do_componente in COMPONENTE_COLUNAS.items():
             if comps.get(componente) == 1:
                 for i in colunas_do_componente:
                     colunas.append(i)
         mask.loc[grupo.index , colunas] = True
+
+    for i in COLUNAS_VETOR:
+        novos = []
+        for j in df.index:
+            valor = df.loc[j , i]
+            if mask.loc[j , i] and not vetor_valido(valor):
+                novos.append(pd.NA)
+            else:
+                novos.append(valor)
+        df[i] = novos
+
+    for i in VETOR_NAO_ZERO:
+        novos = []
+        for j in df.index:
+            valor = df.loc[j, i]
+            if mask.loc[j, i] and not vetor_sem_zero(valor):
+                novos.append(pd.NA)
+            else:
+                novos.append(valor)
+        df[i] = novos
+
+    
+
+    
             
 
     nulo_monitorado = (df[NUMERICAS].isnull() & mask).any(axis=1)
