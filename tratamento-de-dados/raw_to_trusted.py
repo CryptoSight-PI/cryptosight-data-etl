@@ -1,21 +1,4 @@
-"""Raw -> Trusted.
 
-Este arquivo junta três pedaços que antes estavam espalhados:
-  - pipeline.py (versão antiga)  -> baixar do raw, agrupar por empresa, consolidar CSVs
-  - etl/silver.py                -> limpeza: separar linhas válidas das inválidas
-  - silver.py (versão antiga)    -> csv_to_json (gera o treated-data.json)
-
-LEGENDA DOS COMENTÁRIOS
-  [REUSADO]  código copiado do original, sem mudança de lógica
-  [ALTERADO] código do original com uma mudança (explicada no comentário)
-  [NOVO]     código que não existia no original
-  [COMO FUNCIONA]  explicação do que o trecho faz
-
-FLUXO (por empresa):
-  raw (S3) --baixar_raw--> CSVs locais --consolidar--> Csv/all-collected.csv
-  --separar_validos--> Silver/clean_data.csv + Silver/dados_nulos.csv
-  --csv_to_json--> Silver/treated-data.json  --> tudo enviado ao bucket trusted
-"""
 import csv
 import json
 import re
@@ -25,15 +8,7 @@ import io
 
 import pandas as pd
 
-# from .config import (
-#     PASTA_CSV,
-#     PASTA_RAW,
-#     PASTA_SILVER,
-#     PREFIXO_RAW_METRICS,
-#     particao,
-# )
 
-# from .config import baixar_arquivos_s3, enviar_para_s3
 COMPONENTE_COLUNAS = {
     "cpu":         ["cpu_percent", "cpu_frequency"],
     "ram":         ["ram_percent"],
@@ -131,38 +106,6 @@ def buscar_empresa(id_empresa):
         )
 
     return nome_empresa
-
-# def baixar_raw(dia):
-#     """[COMO FUNCIONA] Baixa do bucket raw os CSVs de métricas e devolve
-#     {id_empresa: [arquivos]}."""
-#     arquivos_raw = baixar_arquivos_s3(
-#         "raw",
-#         f"{PREFIXO_RAW_METRICS}/{particao(dia)}/",
-#         PASTA_RAW,
-#     )
-#     if not arquivos_raw:
-#         raise RuntimeError(
-#             "Nenhum CSV de métricas foi encontrado em raw/metrics/ no bucket Raw."
-#         )
-#     return _agrupar_por_empresa(arquivos_raw)
-
-
-
-# def consolidar(id_empresa, arquivos_empresa):
-#     """Junta os CSVs da empresa em Csv/all-collected.csv"""
-#     PASTA_CSV.mkdir(parents=True, exist_ok=True)
-
-#     dataframes = [pd.read_csv(arquivo, sep=";") for arquivo in arquivos_empresa]
-#     caminho_consolidado = PASTA_CSV / "all-collected.csv"
-#     pd.concat(dataframes, ignore_index=True).to_csv(
-#         caminho_consolidado,
-#         sep=";",
-#         index=False,
-#     )
-#     print(
-#         f"Empresa {id_empresa}: {len(arquivos_empresa)} CSVs raw "
-#         f"consolidados em {caminho_consolidado}."
-#     )
 
 def vetor_valido(texto):
     for i in str(texto).strip("[] ").split(","):
@@ -335,7 +278,3 @@ def main(id_empresa, arquivos_empresa, dia):
         f"{len(nulos)} descartadas."
     )
 
-# if __name__ == "__main__":
-#     dia = date.today()
-#     for id_empresa, arquivos in sorted(baixar_raw(dia).items()):
-#         main(id_empresa, arquivos, dia)
