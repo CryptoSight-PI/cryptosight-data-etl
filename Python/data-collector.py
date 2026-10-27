@@ -25,16 +25,6 @@ intervalo_csv = 60
 
 user = get_mac_address()
 
-
-# def get_fan_speeds():
-#     if not hasattr(psutil, "sensors_fans"):
-#         return {}
-#     result = {}
-#     for chip, fans in psutil.sensors_fans().items():
-#         for fan in fans:
-#             result[fan.label] = fan.current
-#     return result
-
 RPM_MAX = 5200
 
 def get_fan_speeds():
