@@ -70,12 +70,14 @@ def capture(components):
         if current_time - tempo_inicio_csv >= intervalo_csv:
             if os.path.exists(nome_arquivo):
                 mandars3(data_atual, nome_arquivo)
+                os.remove(nome_arquivo)
                 print("teste1")
             df_processo = capturarprocesso()
             nome_arquivo_proc = f"{id_empresa}_processos_{data_atual}_{user.replace(':', '-')}.csv"
             df_processo.to_csv(nome_arquivo_proc, sep=";", index=False)
             if os.path.exists(nome_arquivo_proc):
                 mandars3(data_atual, nome_arquivo_proc)
+                os.remove(nome_arquivo_proc)
                 print("teste2")
             data_atual = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             nome_arquivo = os.path.join(
