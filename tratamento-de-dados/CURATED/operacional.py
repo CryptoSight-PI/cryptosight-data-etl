@@ -32,7 +32,7 @@ def calcular_kpis(dados, metricas , idmaquina):
             "min": float(serie.min()),
             "max": float(serie.max()),
             "max_em": dados.loc[pico, "timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
-            "max_maquina_id": int(idmaquina),
+            "max_maquina_id": int(idmaquina) if idmaquina is not None else int(dados.loc[pico , "_id_maquina"]),
         }
     return kpis
 
@@ -62,6 +62,9 @@ def main(idempresa, dia):
 
 
     dados_maquinas = {}
+    dados_sessoes = {}
+    dados_farms = {}
+    dados_empresa = []
 
     paginator = s3.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver):
@@ -84,9 +87,11 @@ def main(idempresa, dia):
             usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
 
             for id_farm, id_sessao, id_maquina, mac in maquinas:
-                dados = df[usuarios == mac]
+                dados = df[usuarios == mac].copy()
                 if dados.empty:
                     continue
+                dados["_id_maquina"] = id_maquina
+                
 
                 chave = (id_farm, id_sessao, id_maquina)
                 if chave not in dados_maquinas:
@@ -96,29 +101,64 @@ def main(idempresa, dia):
                 dados_maquinas[chave].append(dados)
 
 
-                for chave in dados_maquinas:
-                    id_farm = chave[0]
-                    id_sessao = chave[1]
-                    id_maquina = chave[2]
+                dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
+                dados_farms.setdefault(id_farm, []).append(dados)
+                dados_empresa.append(dados)
 
-                    dados = pd.concat(dados_maquinas[chave], ignore_index=True)
 
-                    dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+    for chave in dados_maquinas:
+        id_farm = chave[0]
+        id_sessao = chave[1]
+        id_maquina = chave[2]
 
-                    metricas = [c for c in dados.columns if c in NUMERICAS]
+        dados = pd.concat(dados_maquinas[chave], ignore_index=True)
 
-                    kpis = calcular_kpis(dados, metricas , id_maquina)
-                    series = calcular_series(dados, metricas , id_maquina)
+        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
-                    destino = (f"{idempresa}/{nome_sanitizado}/operacional/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia).replace('/' , '-')}"
-                    )
+        metricas = [c for c in dados.columns if c in NUMERICAS]
 
-                    gravar_s3(f"{destino}/kpis.json", kpis)
+        kpis = calcular_kpis(dados, metricas , id_maquina)
+        series = calcular_series(dados, metricas , id_maquina)
 
-                    gravar_s3(f"{destino}/series.json", {
-                        "resolucao": "1h",
-                        "pontos": series
-                    })
+        destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia).replace('/' , '-')}")
+
+                    
+        # destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/dias/{particao(dia).replace('/' , '-')}")
+
+        # destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/dias/{particao(dia).replace('/' , '-')}")
+
+        gravar_s3(f"{destinoespecificodia}/kpis.json", kpis)
+
+        gravar_s3(f"{destinoespecificodia}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+                
+    for chave in dados_sessoes:
+
+        id_farm = chave[0]
+        id_sessao = chave[1]
+
+        dados = pd.concat(dados_sessoes[chave], ignore_index=True)
+
+        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+
+        metricas = [c for c in dados.columns if c in NUMERICAS]
+
+        kpis = calcular_kpis(dados, metricas, None)
+        series = calcular_series(dados, metricas, None)
+
+        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/dias/{particao(dia).replace('/' , '-')}")
+                    
+
+        gravar_s3(f"{destinogeralsessaodia}/kpis.json", kpis)
+
+        gravar_s3(f"{destinogeralsessaodia}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
 
 
 
