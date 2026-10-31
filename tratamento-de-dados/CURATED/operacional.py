@@ -1,59 +1,125 @@
 from configenvironment import s3 , bucket_silver , bucket_gold , bucket_bronze , cursor
 # from trusted_to_curated import sanitizar_nome, ARQUIVOS
 from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
-from raw_to_trusted import buscar_empresa, particao
+from raw_to_trusted import buscar_empresa, particao, NUMERICAS, COLUNAS_VETOR
 import pandas as pd
 import io
 import json
+
+
+def gravar_s3(chave, conteudo):
+    s3.put_object(
+        Bucket=bucket_gold,
+        Key=chave,
+        Body=json.dumps(conteudo, ensure_ascii=False, indent=2),
+        ContentType="application/json",
+    )
+
+
+def calcular_kpis(dados, metricas , idmaquina):
+    kpis = {}
+    for c in metricas:
+        serie = dados[c].dropna()
+        if serie.empty:
+            continue
+ 
+        pico = serie.idxmax()
+ 
+        kpis[c] = {
+            "sum": float(serie.sum()),
+            "count": int(serie.count()),
+            "avg": float(serie.mean()),
+            "min": float(serie.min()),
+            "max": float(serie.max()),
+            "max_em": dados.loc[pico, "timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
+            "max_maquina_id": int(idmaquina),
+        }
+    return kpis
+
+
+def calcular_series(dados, metricas , idmaquina):
+    listaserie = []
+    for hora, df in dados.groupby(dados["timestamp"].dt.floor("60min")):
+        listaserie.append({
+            "t": hora.strftime("%Y-%m-%dT%H:%M:%S"),
+            "amostras": len(df),
+            "metricas": calcular_kpis(df, metricas , idmaquina),
+        })
+    return listaserie
+
+
 
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     prefixo_silver = f"{idempresa}/{particao(dia)}/"
 
+    maquinas = []
+    for id_farm in buscar_farm(idempresa):
+        for id_sessao in buscar_sessoes(id_farm):
+            for maquina in buscar_maquinas_sessao(id_sessao):
+                mac = str(maquina["mac_address"]).strip().lower().replace("-", ":")
+                maquinas.append((id_farm, id_sessao, maquina["id_maquina"], mac))
+
+
+    dados_maquinas = {}
+
     paginator = s3.get_paginator("list_objects_v2")
-    page_iterator = paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver)
+    for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver):
+        for i in page.get("Contents", []):
+            key = i["Key"]
+            nome_arquivo = key.rsplit("/", 1)[-1]
 
-    for page in page_iterator:
+            
+            # if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
+            if not nome_arquivo.endswith(".csv"):
+                continue
 
-        if 'Contents' in page:
+            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
 
-            for i in page['Contents']:
+            if "user" not in df.columns:
+                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
+                continue
 
-                key = i["Key"]
-                nome_arquivo = key.rsplit("/", 1)[-1]
+            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
 
-                if not nome_arquivo.endswith(".csv"):
+            for id_farm, id_sessao, id_maquina, mac in maquinas:
+                dados = df[usuarios == mac]
+                if dados.empty:
                     continue
 
-                conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+                chave = (id_farm, id_sessao, id_maquina)
+                if chave not in dados_maquinas:
+                    dados_maquinas[chave] = []
+                # gravar_s3(chave_destino, dados)
 
-                df = pd.read_csv(io.BytesIO(conteudo), sep=";")
+                dados_maquinas[chave].append(dados)
 
-                if "user" not in df.columns:
-                    print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
-                    continue
 
-                for id_farm in buscar_farm(idempresa):
-                    for id_sessao in buscar_sessoes(id_farm):
-                        for maquina in buscar_maquinas_sessao(id_sessao):
+                for chave in dados_maquinas:
+                    id_farm = chave[0]
+                    id_sessao = chave[1]
+                    id_maquina = chave[2]
 
-                            id_maquina = maquina["id_maquina"]
-                            mac = maquina["mac_address"]
+                    dados = pd.concat(dados_maquinas[chave], ignore_index=True)
 
-                            dados = df[
-                            df["user"].astype(str).str.strip().str.lower()
-                            .str.replace("-", ":", regex=False) == mac]
+                    dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
-                            chave_destino = f"{idempresa}/{nome_sanitizado}/operacional/farm={id_farm}/sessao={id_sessao}/maquina={maquina['id_maquina']}/{particao(dia)}/{nome_arquivo.replace('.csv' , '.json')}"
+                    metricas = [c for c in dados.columns if c in NUMERICAS]
 
-                            registros = dados.to_dict(orient = "records")
+                    kpis = calcular_kpis(dados, metricas , id_maquina)
+                    series = calcular_series(dados, metricas , id_maquina)
 
-                            content_type = "application/json" if nome_arquivo.endswith(".json") else "text/csv"
+                    destino = (f"{idempresa}/{nome_sanitizado}/operacional/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia)}"
+                    )
 
-                            s3.put_object(
-                                Bucket=bucket_gold,
-                                Key=chave_destino,
-                                Body=json.dumps(registros, ensure_ascii=False, indent = 4),
-                                ContentType=content_type,
-                            ) 
+                    gravar_s3(f"{destino}/kpis.json", kpis)
+
+                    gravar_s3(f"{destino}/series.json", {
+                        "resolucao": "1h",
+                        "pontos": series
+                    })
+
+
+
     print("teste")
