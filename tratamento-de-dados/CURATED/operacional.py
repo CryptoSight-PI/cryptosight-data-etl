@@ -110,7 +110,7 @@ def main(idempresa, dia):
                     kpis = calcular_kpis(dados, metricas , id_maquina)
                     series = calcular_series(dados, metricas , id_maquina)
 
-                    destino = (f"{idempresa}/{nome_sanitizado}/operacional/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia)}"
+                    destino = (f"{idempresa}/{nome_sanitizado}/operacional/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia).replace('/' , '-')}"
                     )
 
                     gravar_s3(f"{destino}/kpis.json", kpis)
