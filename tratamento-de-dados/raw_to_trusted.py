@@ -2,7 +2,7 @@
 import csv
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from configenvironment import s3, bucket_bronze, bucket_silver , cursor
 import io
 
@@ -229,6 +229,7 @@ def main(id_empresa, arquivos_empresa, dia):
         raise ValueError(
             f"Nenhum CSV encontrado para a empresa {id_empresa}."
         )
+    iddoarquivo = datetime.now().strftime("%Y%m%dT%H%M%S%fZ")
 
     dataframes = [
         ler_csv_s3(chave)
@@ -255,19 +256,19 @@ def main(id_empresa, arquivos_empresa, dia):
     )
 
     salvar_s3(
-        f"{prefixo}/clean_data.csv",
+        f"{prefixo}/clean_data_{iddoarquivo}.csv",
         conteudo_limpo,
         "text/csv",
     )
 
     salvar_s3(
-        f"{prefixo}/dados_nulos.csv",
+        f"{prefixo}/dados_nulos_{iddoarquivo}.csv",
         conteudo_nulos,
         "text/csv",
     )
 
     salvar_s3(
-        f"{prefixo}/treated-data.json",
+        f"{prefixo}/treated-data_{iddoarquivo}.json",
         conteudo_json,
         "application/json",
     )
