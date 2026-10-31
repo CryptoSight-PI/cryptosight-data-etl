@@ -48,6 +48,17 @@ def calcular_series(dados, metricas , idmaquina):
     return listaserie
 
 
+def gravar_janelas(destino, kpis, series):
+
+    for janela in ["24h", "7d", "30d"]:
+
+        gravar_s3(f"{destino}/janelas/{janela}.json", {
+            "kpis": kpis,
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
 
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
@@ -131,6 +142,9 @@ def main(idempresa, dia):
         destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}/mes={mes}")
 
         destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}")
+
+        destinoespecifico = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
+
          
                 
 
@@ -164,6 +178,10 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+
+
+        gravar_janelas(destinoespecifico, kpis, series)
         
         
 
@@ -185,15 +203,20 @@ def main(idempresa, dia):
 
         destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}/dia={dia_numero}")
         destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}")  
-        destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}")     
+        destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}") 
+        destinogeralsessao = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")     
 
         destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}/dia={dia_numero}")
         destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}")  
         destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}") 
+        destinogeralfarm = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}") 
+        
 
         destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}/dia={dia_numero}")
         destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}")  
-        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}")                  
+        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}")
+        destinogeralempresa = (f"{idempresa}/{nome_sanitizado}/operacional/geral")                  
+                          
 
         gravar_s3(f"{destinogeralsessaodia}/kpis.json", kpis)
 
@@ -220,6 +243,8 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        gravar_janelas(destinogeralsessao, kpis , series)
+
         gravar_s3(f"{destinogeralfarmdia}/kpis.json", kpis)
                         
         gravar_s3(f"{destinogeralfarmdia}/series.json", {
@@ -242,6 +267,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_janelas(destinogeralfarm, kpis , series)
 
 
         gravar_s3(f"{destinogeralempresadia}/kpis.json", kpis)
@@ -266,6 +293,9 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+
+        gravar_janelas(destinogeralempresa, kpis , series)
 
 #TODOS OS ARQUIVOS QUE GRAVEI NO S3 SAO PRA TESTE POR ENQUANTO SO PRA VER O PARTICIONAMENTO
 
