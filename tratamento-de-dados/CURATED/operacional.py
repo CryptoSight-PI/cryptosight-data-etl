@@ -51,6 +51,12 @@ def calcular_series(dados, metricas , idmaquina):
 
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
+    data = pd.to_datetime(dia)
+
+    ano = data.strftime("%Y")
+    mes = data.strftime("%m")
+    dia_numero = data.strftime("%d")
+
     prefixo_silver = f"{idempresa}/{particao(dia)}/"
 
     maquinas = []
@@ -120,12 +126,18 @@ def main(idempresa, dia):
         kpis = calcular_kpis(dados, metricas , id_maquina)
         series = calcular_series(dados, metricas , id_maquina)
 
-        destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/dias/{particao(dia).replace('/' , '-')}")
+        destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}/mes={mes}/dia={dia_numero}")
+     
+        destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}/mes={mes}")
+
+        destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}")
+         
+                
 
                     
-        # destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/dias/{particao(dia).replace('/' , '-')}")
+        # destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/{particao(dia)}")
 
-        # destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/dias/{particao(dia).replace('/' , '-')}")
+        # destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
         gravar_s3(f"{destinoespecificodia}/kpis.json", kpis)
 
@@ -133,6 +145,27 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+
+        #Apenas para TESTE nao esta funcionando REALMENTE ->
+
+
+        gravar_s3(f"{destinoespecificomes}/kpis.json", kpis)
+        
+        gravar_s3(f"{destinoespecificomes}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinoespecificoano}/kpis.json", kpis)
+        
+        gravar_s3(f"{destinoespecificoano}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+        
+        
 
 
                 
@@ -150,8 +183,17 @@ def main(idempresa, dia):
         kpis = calcular_kpis(dados, metricas, None)
         series = calcular_series(dados, metricas, None)
 
-        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/dias/{particao(dia).replace('/' , '-')}")
-                    
+        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}/dia={dia_numero}")
+        destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}")  
+        destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}")     
+
+        destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}/dia={dia_numero}")
+        destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}")  
+        destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}") 
+
+        destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}/dia={dia_numero}")
+        destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}")  
+        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}")                  
 
         gravar_s3(f"{destinogeralsessaodia}/kpis.json", kpis)
 
@@ -161,5 +203,70 @@ def main(idempresa, dia):
         })
 
 
+        #apenas para TESTE nao esta funcionando REALMENTE
+
+        gravar_s3(f"{destinogeralsessaomes}/kpis.json", kpis)
+        
+        gravar_s3(f"{destinogeralsessaomes}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralsessaoano}/kpis.json", kpis)
+                
+        gravar_s3(f"{destinogeralsessaoano}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+        gravar_s3(f"{destinogeralfarmdia}/kpis.json", kpis)
+                        
+        gravar_s3(f"{destinogeralfarmdia}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralfarmmes}/kpis.json", kpis)
+                                
+        gravar_s3(f"{destinogeralfarmmes}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralfarmano}/kpis.json", kpis)
+                                        
+        gravar_s3(f"{destinogeralfarmano}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralempresadia}/kpis.json", kpis)
+                                                
+        gravar_s3(f"{destinogeralempresadia}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralempresames}/kpis.json", kpis)
+                                                        
+        gravar_s3(f"{destinogeralempresames}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+
+        gravar_s3(f"{destinogeralempresaano}/kpis.json", kpis)
+                                                                
+        gravar_s3(f"{destinogeralempresaano}/series.json", {
+            "resolucao": "1h",
+            "pontos": series
+        })
+
+#TODOS OS ARQUIVOS QUE GRAVEI NO S3 SAO PRA TESTE POR ENQUANTO SO PRA VER O PARTICIONAMENTO
 
     print("teste")
