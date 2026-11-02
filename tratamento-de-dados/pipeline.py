@@ -127,11 +127,14 @@ def main():
         ):
             try:
                 raw_to_trusted(id_empresa, arquivos_empresa, dia)
-                trusted_to_curated(id_empresa, dia)
 
                 for chave in arquivos_empresa:
                     arquivar_arquivo(chave)
+                
 
+                trusted_to_curated(id_empresa, dia)
+
+                
             except Exception as erro:
                 print(
                     f"Erro na empresa {id_empresa}, "
