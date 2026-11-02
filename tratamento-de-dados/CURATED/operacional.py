@@ -50,16 +50,33 @@ def calcular_series(dados, metricas , idmaquina):
     return listaserie
 
 
-def gravar_janelas(destino, kpis, series):
+def gravar_janelas(destino, dados, metricas, idmaquina, agora):
 
-    for janela in ["24h", "7d", "30d"]:
+    janelas = {
+        "24h": agora - pd.Timedelta(hours=24),
+        "7d": agora - pd.Timedelta(days=7),
+        "30d": agora - pd.Timedelta(days=30)
+    }
 
-        gravar_s3(f"{destino}/janelas/{janela}.json", {
-            "kpis": kpis,
+    for nome, limite in janelas.items():
+
+        dados_filtrados = dados[
+            (dados["timestamp"] >= limite) &
+            (dados["timestamp"] <= agora)
+        ]
+
+        if dados_filtrados.empty:
+            continue
+
+        kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
+        series = calcular_series(dados_filtrados, metricas, idmaquina)
+
+        gravar_s3(f"{destino}/{nome}/kpis.json", kpis)
+
+        gravar_s3(f"{destino}/{nome}/series.json", {
             "resolucao": "1h",
             "pontos": series
         })
-
 
 
 
@@ -117,6 +134,115 @@ def vetor_para_numero(texto, modo):
         return sum(valores)
     return sum(valores) / len(valores)
 
+
+
+def carregar_historico_janelas(idempresa, maquinas, agora):
+
+    inicio = agora - pd.Timedelta(days=30)
+
+    meses = pd.period_range(
+        start=inicio.strftime("%Y-%m"),
+        end=agora.strftime("%Y-%m"),
+        freq="M"
+    )
+
+    dados_maquinas = {}
+    dados_sessoes = {}
+    dados_farms = {}
+    dados_empresa = []
+
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for mes_historico in meses:
+
+        prefixo = (
+            f"{idempresa}/"
+            f"ano={mes_historico.year}/"
+            f"mes={mes_historico.month:02d}/"
+        )
+
+        for page in paginator.paginate(
+            Bucket=bucket_silver,
+            Prefix=prefixo
+        ):
+
+            for i in page.get("Contents", []):
+
+                key = i["Key"]
+                nome_arquivo = key.rsplit("/", 1)[-1]
+
+                if not nome_arquivo.endswith(".csv"):
+                    continue
+
+                conteudo = s3.get_object(
+                    Bucket=bucket_silver,
+                    Key=key
+                )["Body"].read()
+
+                df = pd.read_csv(
+                    io.BytesIO(conteudo),
+                    sep=";"
+                )
+
+                for coluna in COLUNAS_VETOR:
+
+                    if coluna not in df.columns:
+                        continue
+
+                    if coluna == "gpu_temp":
+                        modo = "max"
+                    elif coluna == "gpu_energy":
+                        modo = "sum"
+                    else:
+                        modo = "mean"
+
+                    numeros = []
+
+                    for texto in df[coluna]:
+                        numeros.append(
+                            vetor_para_numero(texto, modo)
+                        )
+
+                    df[coluna] = numeros
+
+                df["timestamp"] = pd.to_datetime(
+                    df["timestamp"],
+                    utc=True,
+                    format="mixed"
+                )
+
+                if "user" not in df.columns:
+                    continue
+
+                usuarios = (df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False))
+
+                for id_farm, id_sessao, id_maquina, mac in maquinas:
+
+                    dados = df[usuarios == mac].copy()
+
+                    if dados.empty:
+                        continue
+
+                    dados["_id_maquina"] = id_maquina
+
+                    chave = (id_farm, id_sessao, id_maquina)
+
+                    dados_maquinas.setdefault(chave, []).append(dados)
+
+                    dados_sessoes.setdefault(
+                        (id_farm, id_sessao), []
+                    ).append(dados)
+
+                    dados_farms.setdefault(
+                        id_farm, []
+                    ).append(dados)
+
+                    dados_empresa.append(dados)
+
+    return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
+
+
+
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     data = pd.to_datetime(dia)
@@ -130,11 +256,17 @@ def main(idempresa, dia):
     prefixo_silver_ano = f"{idempresa}/ano={ano}/"
 
     maquinas = []
+    
     for id_farm in buscar_farm(idempresa):
         for id_sessao in buscar_sessoes(id_farm):
             for maquina in buscar_maquinas_sessao(id_sessao):
                 mac = str(maquina["mac_address"]).strip().lower().replace("-", ":")
                 maquinas.append((id_farm, id_sessao, maquina["id_maquina"], mac))
+
+    agora = pd.Timestamp.now(tz="UTC")
+                
+    historico_maquinas, historico_sessoes, historico_farms, historico_empresa = (carregar_historico_janelas(idempresa, maquinas, agora))
+                
 
 
     dados_maquinas = {}
@@ -261,7 +393,8 @@ def main(idempresa, dia):
 
 
 
-        gravar_janelas(destinoespecifico, kpis, series)
+        # gravar_janelas(destinoespecifico, kpis, series)
+        # gravar_janelas(destinoespecifico, dados, metricas, id_maquina)
         
         
 
@@ -327,7 +460,8 @@ def main(idempresa, dia):
             "pontos": series
         })
 
-        gravar_janelas(destinogeralsessao, kpis , series)
+        # gravar_janelas(destinogeralsessao, kpis , series)
+        # gravar_janelas(destinogeralsessao, dados, metricas, None)
 
 
     for chave in dados_farms:
@@ -392,7 +526,7 @@ def main(idempresa, dia):
         })
 
         
-        gravar_janelas(destinogeralfarm, kpis, series)
+        # gravar_janelas(destinogeralfarm, dados, metricas, None)
 
 
 
@@ -459,7 +593,8 @@ def main(idempresa, dia):
         })
 
         
-        gravar_janelas(destinogeralempresa, kpis, series)
+        # gravar_janelas(destinogeralempresa, kpis, series)
+        # gravar_janelas(destinogeralempresa, dados, metricas, None)
 
 
 
@@ -813,15 +948,85 @@ def main(idempresa, dia):
     
 
 
+    # JANELAS de 24  7  30 - segue a mesma logica do resto
+
+    for chave in historico_maquinas:
+
+        id_farm, id_sessao, id_maquina = chave
+
+        dados = pd.concat(
+            historico_maquinas[chave],
+            ignore_index=True
+        )
+
+        metricas = [c for c in dados.columns if c in NUMERICAS]
+
+        destino = (
+            f"{idempresa}/{nome_sanitizado}/operacional/especifico/"
+            f"farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}"
+        )
+
+        gravar_janelas(destino, dados, metricas, id_maquina, agora)
 
 
+    for chave in historico_sessoes:
 
-    
+        id_farm, id_sessao = chave
 
+        dados = pd.concat(
+            historico_sessoes[chave],
+            ignore_index=True
+        )
+
+        metricas = [c for c in dados.columns if c in NUMERICAS]
+
+        destino = (
+            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
+            f"farm={id_farm}/sessao={id_sessao}"
+        )
+
+        gravar_janelas(destino, dados, metricas, None, agora)
+
+
+    for id_farm in historico_farms:
+
+        dados = pd.concat(
+            historico_farms[id_farm],
+            ignore_index=True
+        )
+
+        metricas = [c for c in dados.columns if c in NUMERICAS]
+
+        destino = (
+            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
+            f"farm={id_farm}"
+        )
+
+        gravar_janelas(destino, dados, metricas, None, agora)
+
+
+    if historico_empresa:
+
+        dados = pd.concat(
+            historico_empresa,
+            ignore_index=True
+        )
+
+        metricas = [c for c in dados.columns if c in NUMERICAS]
+
+        destino = (
+            f"{idempresa}/{nome_sanitizado}/operacional/geral"
+        )
+
+        gravar_janelas(destino, dados, metricas, None, agora)
 
 
         
-    
+
+
+
+            
+        
 
 
 #TODOS OS ARQUIVOS QUE GRAVEI NO S3 SAO PRA TESTE POR ENQUANTO SO PRA VER O PARTICIONAMENTO
