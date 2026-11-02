@@ -62,6 +62,38 @@ def gravar_janelas(destino, kpis, series):
 
 
 
+
+def gerar_atual(dados):
+    # o sort serve pra organizar pelo timestamp
+    #o iloc -1 pega o ultimo
+    ultima = dados.sort_values("timestamp").iloc[-1]
+
+    atual = {
+        "timestamp": ultima["timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
+        "metricas": ultima[NUMERICAS].to_dict()
+    }
+
+    return atual
+
+
+def gerar_atual_geral(dados):
+
+    maquinas = []
+
+    for id_maquina, grupo in dados.groupby("_id_maquina"):
+
+        atual = gerar_atual(grupo)
+
+        atual["id_maquina"] = int(id_maquina)
+
+        maquinas.append(atual)
+
+    return {
+        "total_maquinas": len(maquinas),
+        "maquinas": maquinas
+    }
+
+
 def vetor_para_numero(texto, modo):
     if not isinstance(texto, str):
         return None
@@ -174,6 +206,8 @@ def main(idempresa, dia):
 
         dados = pd.concat(dados_maquinas[chave], ignore_index=True)
 
+        atual = gerar_atual(dados)
+
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
@@ -203,6 +237,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinoespecificodia}/atual.json", atual)
 
 
         #Apenas para TESTE nao esta funcionando REALMENTE ->
@@ -240,6 +276,8 @@ def main(idempresa, dia):
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
+        atual = gerar_atual_geral(dados)
+
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados, metricas, None)
@@ -269,6 +307,8 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        gravar_s3(f"{destinogeralsessaodia}/atual.json", atual)
+
 
         #apenas para TESTE nao esta funcionando REALMENTE
 
@@ -297,6 +337,8 @@ def main(idempresa, dia):
         dados = pd.concat(dados_farms[chave], ignore_index=True)
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+
+        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -331,6 +373,8 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        gravar_s3(f"{destinogeralfarmdia}/atual.json", atual)
+
         
         gravar_s3(f"{destinogeralfarmmes}/kpis.json", kpis)
 
@@ -361,6 +405,8 @@ def main(idempresa, dia):
         dados = pd.concat(dados_empresa, ignore_index=True)
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+
+        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -393,6 +439,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinogeralempresadia}/atual.json", atual)
 
         
         gravar_s3(f"{destinogeralempresames}/kpis.json", kpis)
@@ -486,6 +534,8 @@ def main(idempresa, dia):
 
         dados = pd.concat(dados_maquinas_mes[chave], ignore_index=True)
 
+        # atual = gerar_atual(dados)
+
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
@@ -503,6 +553,8 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        # gravar_s3(f"{destinoespecificomes}/atual.json" , atual)
+
 
     for chave in dados_sessoes_mes:
 
@@ -510,6 +562,8 @@ def main(idempresa, dia):
         id_sessao = chave[1]
 
         dados = pd.concat(dados_sessoes_mes[chave], ignore_index=True)
+
+        atual = gerar_atual_geral(dados)
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
@@ -527,11 +581,15 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        gravar_s3(f"{destinogeralsessaomes}/atual.json" , atual)
+
     for chave in dados_farms_mes:
 
         id_farm = chave
 
         dados = pd.concat(dados_farms_mes[chave], ignore_index=True)
+
+        atual = gerar_atual_geral(dados)
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
@@ -549,10 +607,14 @@ def main(idempresa, dia):
             "pontos": series
         })
 
+        gravar_s3(f"{destinogeralfarmmes}/atual.json" , atual)
+
 
     if dados_empresa_mes:
 
         dados = pd.concat(dados_empresa_mes, ignore_index=True)
+
+        atual = gerar_atual_geral(dados)
 
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
@@ -569,6 +631,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinogeralempresames}/atual.json" , atual)
 
 
 
@@ -644,6 +708,8 @@ def main(idempresa, dia):
         id_maquina = chave[2]
     
         dados = pd.concat(dados_maquinas_ano[chave], ignore_index=True)
+
+        # atual = gerar_atual(dados)
     
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
     
@@ -661,6 +727,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        # gravar_s3(f"{destinoespecificoano}/atual.json" , atual)
     
     
             
@@ -670,6 +738,8 @@ def main(idempresa, dia):
         id_sessao = chave[1]
     
         dados = pd.concat(dados_sessoes_ano[chave], ignore_index=True)
+
+        atual = gerar_atual_geral(dados)
     
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
     
@@ -686,12 +756,16 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinogeralsessaoano}/atual.json" , atual)
     
     for chave in dados_farms_ano:
     
         id_farm = chave
     
         dados = pd.concat(dados_farms_ano[chave], ignore_index=True)
+
+        atual = gerar_atual_geral(dados)
     
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
     
@@ -708,6 +782,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinogeralfarmano}/atual.json" , atual)
     
     
     if dados_empresa_ano:
@@ -715,6 +791,8 @@ def main(idempresa, dia):
         dados = pd.concat(dados_empresa_ano, ignore_index=True)
     
         dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+
+        atual = gerar_atual_geral(dados)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -729,6 +807,8 @@ def main(idempresa, dia):
             "resolucao": "1h",
             "pontos": series
         })
+
+        gravar_s3(f"{destinogeralempresaano}/atual.json" , atual)
     
     
 
