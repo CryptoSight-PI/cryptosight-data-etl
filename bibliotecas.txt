@@ -1,6 +1,7 @@
 psutil
 getmac
 pandas
+numpy
 mysql-connector-python
 python-dotenv
 pynvml
