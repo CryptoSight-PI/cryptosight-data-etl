@@ -20,14 +20,16 @@ def gravar_s3(chave, conteudo):
 
 def calcular_kpis(dados, metricas , idmaquina):
     kpis = {}
-    for c in metricas:
-        serie = dados[c].dropna()
+    for i in metricas:
+        serie = dados[i].dropna()
         if serie.empty:
             continue
- 
+
+
+        #indice do max (maior valor)
         pico = serie.idxmax()
  
-        kpis[c] = {
+        kpis[i] = {
             "sum": float(serie.sum()),
             "count": int(serie.count()),
             "avg": float(serie.mean()),
@@ -84,10 +86,15 @@ def gerar_atual(dados):
     # o sort serve pra organizar pelo timestamp
     #o iloc -1 pega o ultimo
     ultima = dados.sort_values("timestamp").iloc[-1]
+    metricas = ultima[NUMERICAS]
+    # isso para evitar o nan no json, pq quebra no front dps, dai bota none
+    # where é tipo where(condicao , valor se falso)
+    metricas = metricas.astype(object).where(metricas.notna(), None)
+
 
     atual = {
         "timestamp": ultima["timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
-        "metricas": ultima[NUMERICAS].to_dict()
+        "metricas": metricas[NUMERICAS].to_dict()
     }
 
     return atual
@@ -98,10 +105,13 @@ def gerar_atual_geral(dados):
     maquinas = []
 
     for id_maquina, grupo in dados.groupby("_id_maquina"):
+        # o group by vai separar todos os dados por maquina , em que id_maquina é esse id e grupo é os dados dessa maquina esepcifica
 
         atual = gerar_atual(grupo)
+        # vai pegar os dados dessa maquina especifica e gerar o atual
 
         atual["id_maquina"] = int(id_maquina)
+        # agora colocando o id da maquina que nao tinha no dicionario que vinha de gerar atual
 
         maquinas.append(atual)
 
@@ -136,15 +146,95 @@ def vetor_para_numero(texto, modo):
 
 
 
+
+def ler_trusted(prefixo, maquinas):
+
+    dados_maquinas = {}
+    dados_sessoes = {}
+    dados_farms = {}
+    dados_empresa = []
+    
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo):
+        for i in page.get("Contents", []):
+            key = i["Key"]
+            nome_arquivo = key.rsplit("/", 1)[-1]
+    
+                
+            if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
+                continue
+    
+            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
+            for coluna in COLUNAS_VETOR:
+                if coluna not in df.columns:
+                    continue
+    
+                if coluna == "gpu_temp":
+                    modo = "max"
+                elif coluna == "gpu_energy":
+                    modo = "sum"
+                else:
+                    modo = "mean"
+    
+                numeros = []
+                for texto in df[coluna]:
+                    numeros.append(vetor_para_numero(texto, modo))
+                df[coluna] = numeros
+    
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+    
+            if "user" not in df.columns:
+                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
+                continue
+    
+            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
+    
+            for id_farm, id_sessao, id_maquina, mac in maquinas:
+                # cada loop filtra pelo mac / maquina
+                dados = df[usuarios == mac].copy()
+                if dados.empty:
+                    continue
+                dados["_id_maquina"] = id_maquina
+                # adiciona o id da maquina pra conseguir saber qual maquina que é, tipo em dados_sessoes vai ter varios df nesse dicionario, e oq separa os df é o id maquina 
+                    
+                dados_maquinas.setdefault((id_farm, id_sessao , id_maquina), []).append(dados)
+                dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
+                # se nao tiver no dicionario, adiciona e atribui um vetor vazio a essa tupla, tipo, (1 , 4) : []
+                #e se ja tiver essa sessao, ou seja, ja tem maquina nessa sessao, apenas adiciona no vetor
+                # tipo assim {
+                    # (1, 10, 100): [],
+                    # (1, 10, 101): []
+                            # }
+                dados_farms.setdefault(id_farm, []).append(dados)
+                dados_empresa.append(dados)
+    
+
+    return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
+
+
+
+
+
+
+
+
 def carregar_historico_janelas(idempresa, maquinas, agora):
 
     inicio = agora - pd.Timedelta(days=30)
+    # pega os ultimos 30 dias
 
     meses = pd.period_range(
         start=inicio.strftime("%Y-%m"),
         end=agora.strftime("%Y-%m"),
         freq="M"
     )
+    # todos os meses desse periodo dos ultimos 30 dias
+
+
+    # nao usa logica do ler_trusted pq iria sobrescrever, ja que muda o prefixo e o ler trusted zera o dicionario quando tem prefixo novo
+
+    #mas na pratica segue a mesma logica do ler trusted, mas o dicionario é criado antes entao nao sobrescreve, le o s3 pelo prefixo
 
     dados_maquinas = {}
     dados_sessoes = {}
@@ -153,13 +243,10 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
 
     paginator = s3.get_paginator("list_objects_v2")
 
-    for mes_historico in meses:
+    for mes in meses:
 
-        prefixo = (
-            f"{idempresa}/"
-            f"ano={mes_historico.year}/"
-            f"mes={mes_historico.month:02d}/"
-        )
+        prefixo = (f"{idempresa}/{mes.year}/{mes.month:02d}/")
+        # o 02d serve para garantir que o mes vai ter dois digitos , tipo 09 ao inves de 9
 
         for page in paginator.paginate(
             Bucket=bucket_silver,
@@ -171,7 +258,7 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
                 key = i["Key"]
                 nome_arquivo = key.rsplit("/", 1)[-1]
 
-                if not nome_arquivo.endswith(".csv"):
+                if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
                     continue
 
                 conteudo = s3.get_object(
@@ -179,10 +266,7 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
                     Key=key
                 )["Body"].read()
 
-                df = pd.read_csv(
-                    io.BytesIO(conteudo),
-                    sep=";"
-                )
+                df = pd.read_csv(io.BytesIO(conteudo), sep=";")
 
                 for coluna in COLUNAS_VETOR:
 
@@ -199,9 +283,7 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
                     numeros = []
 
                     for texto in df[coluna]:
-                        numeros.append(
-                            vetor_para_numero(texto, modo)
-                        )
+                        numeros.append(vetor_para_numero(texto, modo))
 
                     df[coluna] = numeros
 
@@ -225,22 +307,15 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
 
                     dados["_id_maquina"] = id_maquina
 
-                    chave = (id_farm, id_sessao, id_maquina)
+                    dados_maquinas.setdefault((id_farm, id_sessao, id_maquina), []).append(dados)
 
-                    dados_maquinas.setdefault(chave, []).append(dados)
+                    dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
 
-                    dados_sessoes.setdefault(
-                        (id_farm, id_sessao), []
-                    ).append(dados)
-
-                    dados_farms.setdefault(
-                        id_farm, []
-                    ).append(dados)
+                    dados_farms.setdefault(id_farm, []).append(dados)
 
                     dados_empresa.append(dados)
 
     return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
-
 
 
 def main(idempresa, dia):
@@ -252,8 +327,8 @@ def main(idempresa, dia):
     dia_numero = data.strftime("%d")
 
     prefixo_silver = f"{idempresa}/{particao(dia)}/"
-    prefixo_silver_mes = f"{idempresa}/ano={ano}/mes={mes}/"
-    prefixo_silver_ano = f"{idempresa}/ano={ano}/"
+    prefixo_silver_mes = f"{idempresa}/{ano}/{mes}/"
+    prefixo_silver_ano = f"{idempresa}/{ano}/"
 
     maquinas = []
     
@@ -262,6 +337,7 @@ def main(idempresa, dia):
             for maquina in buscar_maquinas_sessao(id_sessao):
                 mac = str(maquina["mac_address"]).strip().lower().replace("-", ":")
                 maquinas.append((id_farm, id_sessao, maquina["id_maquina"], mac))
+                # organiza maquinas em tupla, de forma que farm , sessao, maquina . -- (1 , 2 , 5)
 
     agora = pd.Timestamp.now(tz="UTC")
                 
@@ -269,78 +345,18 @@ def main(idempresa, dia):
                 
 
 
-    dados_maquinas = {}
-    dados_sessoes = {}
-    dados_farms = {}
-    dados_empresa = []
+    dados_maquinas , dados_sessoes , dados_farms , dados_empresa = ler_trusted(prefixo_silver , maquinas)
 
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver):
-        for i in page.get("Contents", []):
-            key = i["Key"]
-            nome_arquivo = key.rsplit("/", 1)[-1]
+    
 
-            
-            # if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
-            if not nome_arquivo.endswith(".csv"):
-                continue
-
-            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
-            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
-            for coluna in COLUNAS_VETOR:
-                if coluna not in df.columns:
-                    continue
-
-                if coluna == "gpu_temp":
-                    modo = "max"
-                elif coluna == "gpu_energy":
-                    modo = "sum"
-                else:
-                    modo = "mean"
-
-                numeros = []
-                for texto in df[coluna]:
-                    numeros.append(vetor_para_numero(texto, modo))
-                df[coluna] = numeros
-
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
-
-            if "user" not in df.columns:
-                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
-                continue
-
-            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
-
-            for id_farm, id_sessao, id_maquina, mac in maquinas:
-                dados = df[usuarios == mac].copy()
-                if dados.empty:
-                    continue
-                dados["_id_maquina"] = id_maquina
-                
-
-                chave = (id_farm, id_sessao, id_maquina)
-                if chave not in dados_maquinas:
-                    dados_maquinas[chave] = []
-                # gravar_s3(chave_destino, dados)
-
-                dados_maquinas[chave].append(dados)
-
-
-                dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
-                dados_farms.setdefault(id_farm, []).append(dados)
-                dados_empresa.append(dados)
-
-
-    for chave in dados_maquinas:
-        id_farm = chave[0]
-        id_sessao = chave[1]
-        id_maquina = chave[2]
-
-        dados = pd.concat(dados_maquinas[chave], ignore_index=True)
+    for id_farm , id_sessao, id_maquina in dados_maquinas:
+      
+        dados = pd.concat(dados_maquinas[(id_farm, id_sessao, id_maquina)], ignore_index=True)
 
         atual = gerar_atual(dados)
 
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+        # vai juntar os dfs do vetor em um so
+        # tipo se tem (1 , 10 , 1) : [df1 , df2 , df3] -> vai criar um df final com os 3 juntos
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -349,19 +365,6 @@ def main(idempresa, dia):
 
         destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}/mes={mes}/dia={dia_numero}")
      
-        destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}/mes={mes}")
-
-        destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/ano={ano}")
-
-        destinoespecifico = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
-
-         
-                
-
-                    
-        # destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/{particao(dia)}")
-
-        # destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
         gravar_s3(f"{destinoespecificodia}/kpis.json", kpis)
 
@@ -373,66 +376,22 @@ def main(idempresa, dia):
         gravar_s3(f"{destinoespecificodia}/atual.json", atual)
 
 
-        #Apenas para TESTE nao esta funcionando REALMENTE ->
-
-
-        gravar_s3(f"{destinoespecificomes}/kpis.json", kpis)
-        
-        gravar_s3(f"{destinoespecificomes}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-
-        gravar_s3(f"{destinoespecificoano}/kpis.json", kpis)
-        
-        gravar_s3(f"{destinoespecificoano}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-
-
-        # gravar_janelas(destinoespecifico, kpis, series)
-        # gravar_janelas(destinoespecifico, dados, metricas, id_maquina)
-        
-        
-
-
+    
                 
-    for chave in dados_sessoes:
+    for id_farm , id_sessao in dados_sessoes:
 
-        id_farm = chave[0]
-        id_sessao = chave[1]
-
-        dados = pd.concat(dados_sessoes[chave], ignore_index=True)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+        dados = pd.concat(dados_sessoes[(id_farm , id_sessao)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
+        # aqui sua geral pq tem varias maquinas na mesma sessao e no  geral separa por maquina 
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados, metricas, None)
         series = calcular_series(dados, metricas, None)
 
-        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}/dia={dia_numero}")
-        destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}")  
-        destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}") 
-        destinogeralsessao = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")     
-
-        destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}/dia={dia_numero}")
-        destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}")  
-        destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}") 
-        destinogeralfarm = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}") 
-        
-
-        destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}/dia={dia_numero}")
-        destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}")  
-        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}")
-        destinogeralempresa = (f"{idempresa}/{nome_sanitizado}/operacional/geral")                  
+        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/ano={ano}/mes={mes}/dia={dia_numero}")             
                           
-
         gravar_s3(f"{destinogeralsessaodia}/kpis.json", kpis)
 
         gravar_s3(f"{destinogeralsessaodia}/series.json", {
@@ -443,34 +402,11 @@ def main(idempresa, dia):
         gravar_s3(f"{destinogeralsessaodia}/atual.json", atual)
 
 
-        #apenas para TESTE nao esta funcionando REALMENTE
 
-        gravar_s3(f"{destinogeralsessaomes}/kpis.json", kpis)
-        
-        gravar_s3(f"{destinogeralsessaomes}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
+    for id_farm in dados_farms:
 
 
-        gravar_s3(f"{destinogeralsessaoano}/kpis.json", kpis)
-                
-        gravar_s3(f"{destinogeralsessaoano}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-        # gravar_janelas(destinogeralsessao, kpis , series)
-        # gravar_janelas(destinogeralsessao, dados, metricas, None)
-
-
-    for chave in dados_farms:
-
-        id_farm = chave
-
-        dados = pd.concat(dados_farms[chave], ignore_index=True)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+        dados = pd.concat(dados_farms[(id_farm)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
 
@@ -479,26 +415,9 @@ def main(idempresa, dia):
         kpis = calcular_kpis(dados, metricas, None)
         series = calcular_series(dados, metricas, None)
 
-        destinogeralfarmdia = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}/ano={ano}/mes={mes}/dia={dia_numero}"
-        )
+        destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/ano={ano}/mes={mes}/dia={dia_numero}")
 
-        destinogeralfarmmes = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}/ano={ano}/mes={mes}"
-        )
-
-        destinogeralfarmano = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}/ano={ano}"
-        )
-
-        destinogeralfarm = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}"
-        )
-
+        
         
         gravar_s3(f"{destinogeralfarmdia}/kpis.json", kpis)
 
@@ -510,35 +429,10 @@ def main(idempresa, dia):
         gravar_s3(f"{destinogeralfarmdia}/atual.json", atual)
 
         
-        gravar_s3(f"{destinogeralfarmmes}/kpis.json", kpis)
-
-        gravar_s3(f"{destinogeralfarmmes}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-        
-        gravar_s3(f"{destinogeralfarmano}/kpis.json", kpis)
-
-        gravar_s3(f"{destinogeralfarmano}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-        
-        # gravar_janelas(destinogeralfarm, dados, metricas, None)
-
-
-
-
-
-        
 
     if dados_empresa:
 
         dados = pd.concat(dados_empresa, ignore_index=True)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         atual = gerar_atual_geral(dados)
 
@@ -547,26 +441,9 @@ def main(idempresa, dia):
         kpis = calcular_kpis(dados, metricas, None)
         series = calcular_series(dados, metricas, None)
 
-        destinogeralempresadia = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"ano={ano}/mes={mes}/dia={dia_numero}"
-        )
+        destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/ano={ano}/mes={mes}/dia={dia_numero}")
 
-        destinogeralempresames = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"ano={ano}/mes={mes}"
-        )
 
-        destinogeralempresaano = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"ano={ano}"
-        )
-
-        destinogeralempresa = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral"
-        )
-
-        
         gravar_s3(f"{destinogeralempresadia}/kpis.json", kpis)
 
         gravar_s3(f"{destinogeralempresadia}/series.json", {
@@ -577,101 +454,14 @@ def main(idempresa, dia):
         gravar_s3(f"{destinogeralempresadia}/atual.json", atual)
 
         
-        gravar_s3(f"{destinogeralempresames}/kpis.json", kpis)
-
-        gravar_s3(f"{destinogeralempresames}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-        
-        gravar_s3(f"{destinogeralempresaano}/kpis.json", kpis)
-
-        gravar_s3(f"{destinogeralempresaano}/series.json", {
-            "resolucao": "1h",
-            "pontos": series
-        })
-
-        
-        # gravar_janelas(destinogeralempresa, kpis, series)
-        # gravar_janelas(destinogeralempresa, dados, metricas, None)
-
-
-
-
 
     #ESTRUTURA PRA SEPARAR POR MES / IDENTICA AO DIARIA, SO MUDA O CAMINHO QUE O PAGINATOR PEGA DO SILVER
 
-    dados_maquinas_mes = {}
-    dados_sessoes_mes = {}
-    dados_farms_mes = {}
-    dados_empresa_mes = []
+    dados_maquinas_mes , dados_sessoes_mes , dados_farms_mes , dados_empresa_mes = ler_trusted(prefixo_silver_mes , maquinas)
 
+    for id_farm, id_sessao, id_maquina in dados_maquinas_mes:
 
-    for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver_mes):
-        for i in page.get("Contents", []):
-            key = i["Key"]
-            nome_arquivo = key.rsplit("/", 1)[-1]
-    
-                
-            # if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
-            if not nome_arquivo.endswith(".csv"):
-                continue
-    
-            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
-            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
-            for coluna in COLUNAS_VETOR:
-                if coluna not in df.columns:
-                    continue
-    
-                if coluna == "gpu_temp":
-                    modo = "max"
-                elif coluna == "gpu_energy":
-                    modo = "sum"
-                else:
-                    modo = "mean"
-    
-                numeros = []
-                for texto in df[coluna]:
-                    numeros.append(vetor_para_numero(texto, modo))
-                df[coluna] = numeros
-    
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
-    
-            if "user" not in df.columns:
-                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
-                continue
-    
-            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
-
-        
-
-
-            for id_farm, id_sessao, id_maquina, mac in maquinas:
-                dados = df[usuarios == mac].copy()
-
-                if dados.empty:
-                    continue
-
-                dados["_id_maquina"] = id_maquina
-
-                chave = (id_farm, id_sessao, id_maquina)
-
-                dados_maquinas_mes.setdefault(chave, []).append(dados)
-                dados_sessoes_mes.setdefault((id_farm, id_sessao), []).append(dados)
-                dados_farms_mes.setdefault(id_farm, []).append(dados)
-                dados_empresa_mes.append(dados)
-
-    for chave in dados_maquinas_mes:
-        id_farm = chave[0]
-        id_sessao = chave[1]
-        id_maquina = chave[2]
-
-        dados = pd.concat(dados_maquinas_mes[chave], ignore_index=True)
-
-        # atual = gerar_atual(dados)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+        dados = pd.concat(dados_maquinas_mes[(id_farm, id_sessao, id_maquina)], ignore_index=True)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -691,16 +481,11 @@ def main(idempresa, dia):
         # gravar_s3(f"{destinoespecificomes}/atual.json" , atual)
 
 
-    for chave in dados_sessoes_mes:
+    for id_farm , id_sessao in dados_sessoes_mes:
 
-        id_farm = chave[0]
-        id_sessao = chave[1]
-
-        dados = pd.concat(dados_sessoes_mes[chave], ignore_index=True)
+        dados = pd.concat(dados_sessoes_mes[(id_farm, id_sessao)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -718,15 +503,11 @@ def main(idempresa, dia):
 
         gravar_s3(f"{destinogeralsessaomes}/atual.json" , atual)
 
-    for chave in dados_farms_mes:
+    for id_farm in dados_farms_mes:
 
-        id_farm = chave
-
-        dados = pd.concat(dados_farms_mes[chave], ignore_index=True)
+        dados = pd.concat(dados_farms_mes[(id_farm)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
-
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -751,8 +532,6 @@ def main(idempresa, dia):
 
         atual = gerar_atual_geral(dados)
 
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
-
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados, metricas, None)
@@ -776,77 +555,11 @@ def main(idempresa, dia):
 
     # ESTRUTURA PRO ANO
 
-    dados_maquinas_ano = {}
-    dados_sessoes_ano = {}
-    dados_farms_ano = {}
-    dados_empresa_ano = []
+    dados_maquinas_ano , dados_sessoes_ano , dados_farms_ano , dados_empresa_ano = ler_trusted(prefixo_silver_ano , maquinas)
 
-
-
-    for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver_ano):
-        for i in page.get("Contents", []):
-            key = i["Key"]
-            nome_arquivo = key.rsplit("/", 1)[-1]
-        
-                    
-            # if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
-            if not nome_arquivo.endswith(".csv"):
-                continue
-        
-            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
-            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
-            for coluna in COLUNAS_VETOR:
-                if coluna not in df.columns:
-                    continue
-        
-                if coluna == "gpu_temp":
-                    modo = "max"
-                elif coluna == "gpu_energy":
-                    modo = "sum"
-                else:
-                    modo = "mean"
-        
-                numeros = []
-                for texto in df[coluna]:
-                    numeros.append(vetor_para_numero(texto, modo))
-                df[coluna] = numeros
-        
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
-        
-            if "user" not in df.columns:
-                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
-                continue
-        
-            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
+    for id_farm , id_sessao, id_maquina in dados_maquinas_ano:
     
-            
-    
-    
-            for id_farm, id_sessao, id_maquina, mac in maquinas:
-                dados = df[usuarios == mac].copy()
-    
-                if dados.empty:
-                    continue
-    
-                dados["_id_maquina"] = id_maquina
-    
-                chave = (id_farm, id_sessao, id_maquina)
-    
-                dados_maquinas_ano.setdefault(chave, []).append(dados)
-                dados_sessoes_ano.setdefault((id_farm, id_sessao), []).append(dados)
-                dados_farms_ano.setdefault(id_farm, []).append(dados)
-                dados_empresa_ano.append(dados)
-
-    for chave in dados_maquinas_ano:
-        id_farm = chave[0]
-        id_sessao = chave[1]
-        id_maquina = chave[2]
-    
-        dados = pd.concat(dados_maquinas_ano[chave], ignore_index=True)
-
-        # atual = gerar_atual(dados)
-    
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+        dados = pd.concat(dados_maquinas_ano[(id_farm , id_sessao , id_maquina)], ignore_index=True)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -867,16 +580,11 @@ def main(idempresa, dia):
     
     
             
-    for chave in dados_sessoes_ano:
+    for id_farm , id_sessao in dados_sessoes_ano:
     
-        id_farm = chave[0]
-        id_sessao = chave[1]
-    
-        dados = pd.concat(dados_sessoes_ano[chave], ignore_index=True)
+        dados = pd.concat(dados_sessoes_ano[(id_farm , id_sessao)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
-    
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -894,15 +602,11 @@ def main(idempresa, dia):
 
         gravar_s3(f"{destinogeralsessaoano}/atual.json" , atual)
     
-    for chave in dados_farms_ano:
+    for id_farm in dados_farms_ano:
     
-        id_farm = chave
-    
-        dados = pd.concat(dados_farms_ano[chave], ignore_index=True)
+        dados = pd.concat(dados_farms_ano[(id_farm)], ignore_index=True)
 
         atual = gerar_atual_geral(dados)
-    
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -924,8 +628,6 @@ def main(idempresa, dia):
     if dados_empresa_ano:
     
         dados = pd.concat(dados_empresa_ano, ignore_index=True)
-    
-        dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
 
         atual = gerar_atual_geral(dados)
     
@@ -1020,15 +722,5 @@ def main(idempresa, dia):
 
         gravar_janelas(destino, dados, metricas, None, agora)
 
-
-        
-
-
-
-            
-        
-
-
-#TODOS OS ARQUIVOS QUE GRAVEI NO S3 SAO PRA TESTE POR ENQUANTO SO PRA VER O PARTICIONAMENTO
 
     print("teste")
