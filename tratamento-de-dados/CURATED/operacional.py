@@ -7,6 +7,11 @@ import io
 import json
 
 
+FUSO_LOCAL = "America/Sao_Paulo"
+
+
+def formatar_timestamp(timestamp):
+    return timestamp.tz_convert(FUSO_LOCAL).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def gravar_s3(chave, conteudo):
@@ -35,17 +40,24 @@ def calcular_kpis(dados, metricas , idmaquina):
             "avg": float(serie.mean()),
             "min": float(serie.min()),
             "max": float(serie.max()),
-            "max_em": dados.loc[pico, "timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
+            "max_em": formatar_timestamp(dados.loc[pico, "timestamp"]),
             "max_maquina_id": int(idmaquina) if idmaquina is not None else int(dados.loc[pico , "_id_maquina"]),
         }
     return kpis
 
 
 def calcular_series(dados, metricas , idmaquina):
+
+    dados = dados.copy()
+
+    dados["timestamp_local"] = (
+        dados["timestamp"].dt.tz_convert(FUSO_LOCAL)
+    )
+
     listaserie = []
-    for hora, df in dados.groupby(dados["timestamp"].dt.floor("60min")):
+    for hora, df in dados.groupby(dados["timestamp_local"].dt.floor("60min")):
         listaserie.append({
-            "t": hora.strftime("%Y-%m-%dT%H:%M:%S"),
+            "t": formatar_timestamp(hora),
             "amostras": len(df),
             "metricas": calcular_kpis(df, metricas , idmaquina),
         })
@@ -73,9 +85,9 @@ def gravar_janelas(destino, dados, metricas, idmaquina, agora):
         kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
         series = calcular_series(dados_filtrados, metricas, idmaquina)
 
-        gravar_s3(f"{destino}/{nome}/kpis.json", kpis)
+        gravar_s3(f"{destino}/janelas/{nome}/kpis.json", kpis)
 
-        gravar_s3(f"{destino}/{nome}/series.json", {
+        gravar_s3(f"{destino}/janelas/{nome}/series.json", {
             "resolucao": "1h",
             "pontos": series
         })
@@ -93,7 +105,7 @@ def gerar_atual(dados):
 
 
     atual = {
-        "timestamp": ultima["timestamp"].strftime("%Y-%m-%dT%H:%M:%S"),
+        "timestamp": formatar_timestamp(ultima["timestamp"]),
         "metricas": metricas[NUMERICAS].to_dict()
     }
 
@@ -121,29 +133,6 @@ def gerar_atual_geral(dados):
     }
 
 
-def vetor_para_numero(texto, modo):
-    if not isinstance(texto, str):
-        return None
-
-    valores = []
-    for parte in texto.strip("[] ").split(","):
-        try:
-            numero = float(parte)
-        except ValueError:
-            return None
-        if numero != numero:
-            return None
-        valores.append(numero)
-
-    if not valores:
-        return None
-
-    if modo == "max":
-        return max(valores)
-    if modo == "sum":
-        return sum(valores)
-    return sum(valores) / len(valores)
-
 
 
 
@@ -161,29 +150,14 @@ def ler_trusted(prefixo, maquinas):
             nome_arquivo = key.rsplit("/", 1)[-1]
     
                 
-            if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
+            if not (nome_arquivo.endswith(".csv")):
                 continue
     
             conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
             df = pd.read_csv(io.BytesIO(conteudo), sep=";")
-            for coluna in COLUNAS_VETOR:
-                if coluna not in df.columns:
-                    continue
-    
-                if coluna == "gpu_temp":
-                    modo = "max"
-                elif coluna == "gpu_energy":
-                    modo = "sum"
-                else:
-                    modo = "mean"
-    
-                numeros = []
-                for texto in df[coluna]:
-                    numeros.append(vetor_para_numero(texto, modo))
-                df[coluna] = numeros
-    
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
-    
+
+            df["timestamp"] = pd.to_datetime(df["timestamp"],utc=True,format="mixed")
+            
             if "user" not in df.columns:
                 print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
                 continue
@@ -211,10 +185,6 @@ def ler_trusted(prefixo, maquinas):
     
 
     return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
-
-
-
-
 
 
 
@@ -258,7 +228,7 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
                 key = i["Key"]
                 nome_arquivo = key.rsplit("/", 1)[-1]
 
-                if not (nome_arquivo.startswith("clean_data") and nome_arquivo.endswith(".csv")):
+                if not (nome_arquivo.endswith(".csv")):
                     continue
 
                 conteudo = s3.get_object(
@@ -268,30 +238,8 @@ def carregar_historico_janelas(idempresa, maquinas, agora):
 
                 df = pd.read_csv(io.BytesIO(conteudo), sep=";")
 
-                for coluna in COLUNAS_VETOR:
 
-                    if coluna not in df.columns:
-                        continue
-
-                    if coluna == "gpu_temp":
-                        modo = "max"
-                    elif coluna == "gpu_energy":
-                        modo = "sum"
-                    else:
-                        modo = "mean"
-
-                    numeros = []
-
-                    for texto in df[coluna]:
-                        numeros.append(vetor_para_numero(texto, modo))
-
-                    df[coluna] = numeros
-
-                df["timestamp"] = pd.to_datetime(
-                    df["timestamp"],
-                    utc=True,
-                    format="mixed"
-                )
+                df["timestamp"] = pd.to_datetime(df["timestamp"],utc=True,format="mixed")
 
                 if "user" not in df.columns:
                     continue
