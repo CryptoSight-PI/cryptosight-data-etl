@@ -16,7 +16,7 @@ def gravar_s3(chave, conteudo):
     s3.put_object(
         Bucket=bucket_gold,
         Key=chave,
-        Body=json.dumps({"gerado_em": formatar_timestamp(pd.Timestamp.now(tz="UTC")), "dados": conteudo}, ensure_ascii=False, indent=2),
+        Body=json.dumps({"gerado_em": formatar_timestamp(pd.Timestamp.now(tz="UTC")), "dados": conteudo}, ensure_ascii=False, default=float, indent=2),
         ContentType="application/json",
     )
 
@@ -103,12 +103,6 @@ def gravar_janelas(destino, dados, metricas, idmaquina, agora):
         kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
         series = calcular_series(dados_filtrados, metricas, idmaquina)
 
-        # gravar_s3(f"{destino}/janelas/{nome}/kpis.json", kpis)
-
-        # gravar_s3(f"{destino}/janelas/{nome}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
         juntar_metricas(f"{destino}/janelas/{nome}", kpis , series)
 
 
@@ -207,95 +201,14 @@ def ler_trusted(prefixo, maquinas):
 
 
 
-
-def carregar_historico_janelas(idempresa, maquinas, agora):
-
-    inicio = agora - pd.Timedelta(days=30)
-    # pega os ultimos 30 dias
-
-    meses = pd.period_range(
-        start=inicio.strftime("%Y-%m"),
-        end=agora.strftime("%Y-%m"),
-        freq="M"
-    )
-    # todos os meses desse periodo dos ultimos 30 dias
-
-
-    # nao usa logica do ler_trusted pq iria sobrescrever, ja que muda o prefixo e o ler trusted zera o dicionario quando tem prefixo novo
-
-    #mas na pratica segue a mesma logica do ler trusted, mas o dicionario é criado antes entao nao sobrescreve, le o s3 pelo prefixo
-
-    dados_maquinas = {}
-    dados_sessoes = {}
-    dados_farms = {}
-    dados_empresa = []
-
-    paginator = s3.get_paginator("list_objects_v2")
-
-    for mes in meses:
-
-        prefixo = (f"{idempresa}/{mes.year}/{mes.month:02d}/")
-        # o 02d serve para garantir que o mes vai ter dois digitos , tipo 09 ao inves de 9
-
-        for page in paginator.paginate(
-            Bucket=bucket_silver,
-            Prefix=prefixo
-        ):
-
-            for i in page.get("Contents", []):
-
-                key = i["Key"]
-                nome_arquivo = key.rsplit("/", 1)[-1]
-
-                if not (nome_arquivo.endswith(".csv")):
-                    continue
-
-                conteudo = s3.get_object(
-                    Bucket=bucket_silver,
-                    Key=key
-                )["Body"].read()
-
-                df = pd.read_csv(io.BytesIO(conteudo), sep=";")
-
-
-                df["timestamp"] = pd.to_datetime(df["timestamp"],utc=True,format="mixed")
-
-                if "user" not in df.columns:
-                    continue
-
-                usuarios = (df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False))
-
-                for id_farm, id_sessao, id_maquina, mac in maquinas:
-
-                    dados = df[usuarios == mac].copy()
-
-                    if dados.empty:
-                        continue
-
-                    dados["_id_maquina"] = id_maquina
-
-                    dados_maquinas.setdefault((id_farm, id_sessao, id_maquina), []).append(dados)
-
-                    dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
-
-                    dados_farms.setdefault(id_farm, []).append(dados)
-
-                    dados_empresa.append(dados)
-
-    return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
-
-
-
-def gravar_catalogo(idempresa):
+def gravar_catalogo(idempresa , nomesanitizado):
     cursor.execute("""select f.id, f.nome, s.id, s.nome, m.id, m.modelo , m.tipo from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id where e.id = %s
         """, (idempresa,))
     maquinas = []
     for farmid , farmnome, sessaoid , sessaonome , maqid , maqmodelo , maqtipo in cursor.fetchall():
         maquinas.append({"id_farm" : farmid , "farm" : farmnome , "id_sessao" : sessaoid , "sessao" : sessaonome , "id_maquina" : maqid , "modelo" : maqmodelo , "tipo" : maqtipo})
     
-    gravar_s3(f"{idempresa}/{sanitizar_nome(idempresa)}/catalogo/estrutura.json", {"maquinas": maquinas})
-
-
+    gravar_s3(f"{idempresa}/{nomesanitizado}/operacional/catalogo/estrutura.json", {"maquinas": maquinas})
 
     cursor.execute("""select mc.id ,  mc.id_maquina, c.nome, mc.limite_min, mc.limite_max, mc.monitorado from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where e.id = %s
         """, (idempresa,))
@@ -304,7 +217,7 @@ def gravar_catalogo(idempresa):
     for mcid, id_maquina , nomecomponente , limite_min , limite_max , monitorado in cursor.fetchall():
         limites.append({"id" : mcid , "id_maquina" : id_maquina , "componente" : nomecomponente , "limite_min" : limite_min , "limite_max" : limite_max , "monitorado" : monitorado})
 
-    gravar_s3(f"{idempresa}/{sanitizar_nome(idempresa)}/catalogo/limites.json", {"limites": limites})
+    gravar_s3(f"{idempresa}/{nomesanitizado}/operacional/catalogo/limites.json", {"limites": limites})
 
 
 def main(idempresa, dia):
@@ -330,9 +243,33 @@ def main(idempresa, dia):
 
     agora = pd.Timestamp.now(tz="UTC")
     
-                
-    historico_maquinas, historico_sessoes, historico_farms, historico_empresa = (carregar_historico_janelas(idempresa, maquinas, agora))
-                
+    inicio = agora - pd.Timedelta(days=30)
+        # pega os ultimos 30 dias
+    
+    meses = pd.period_range(
+        start=inicio.strftime("%Y-%m"),
+        end=agora.strftime("%Y-%m"),
+        freq="M"
+    )
+
+    historico_maquinas = {}
+    historico_sessoes = {}
+    historico_farms = {}
+    historico_empresa = []
+
+    for mes in meses:
+        dados_maquinas, dados_sessoes, dados_farms, dados_empresa = ler_trusted(f"{idempresa}/{mes.year}/{mes.month:02d}/",maquinas)
+
+        for id_farm , id_sessao , id_maquina in dados_maquinas:
+            historico_maquinas.setdefault((id_farm , id_sessao , id_maquina), []).extend(dados_maquinas[(id_farm , id_sessao , id_maquina)])
+
+        for id_farm , id_sessao in dados_sessoes:
+            historico_sessoes.setdefault((id_farm , id_sessao), []).extend(dados_sessoes[(id_farm , id_sessao)])
+
+        for id_farm in dados_farms:
+            historico_farms.setdefault((id_farm), []).extend(dados_farms[(id_farm)])
+
+        historico_empresa.extend(dados_empresa)      
 
 
     dados_maquinas , dados_sessoes , dados_farms , dados_empresa = ler_trusted(prefixo_silver , maquinas)
@@ -354,18 +291,8 @@ def main(idempresa, dia):
         series = calcular_series(dados, metricas , id_maquina)
 
         destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
-     
-
-        # gravar_s3(f"{destinoespecificodia}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinoespecificodia}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinoespecificodia}" , kpis , series)
-
-        # gravar_s3(f"{destinoespecificodia}/atual.json", atual)
 
 
     
@@ -374,26 +301,14 @@ def main(idempresa, dia):
 
         dados = pd.concat(dados_sessoes[(id_farm , id_sessao)], ignore_index=True)
 
-        atual = gerar_atual_geral(dados)
-        # aqui sua geral pq tem varias maquinas na mesma sessao e no  geral separa por maquina 
-
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados, metricas, None)
         series = calcular_series(dados, metricas, None)
 
         destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}/dia={dia_numero}")             
-                          
-        # gravar_s3(f"{destinogeralsessaodia}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralsessaodia}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinogeralsessaodia}" , kpis , series)
-
-        # gravar_s3(f"{destinogeralsessaodia}/atual.json", atual)
 
 
 
@@ -402,8 +317,6 @@ def main(idempresa, dia):
 
         dados = pd.concat(dados_farms[(id_farm)], ignore_index=True)
 
-        atual = gerar_atual_geral(dados)
-
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados, metricas, None)
@@ -411,26 +324,12 @@ def main(idempresa, dia):
 
         destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
-        
-        
-        # gravar_s3(f"{destinogeralfarmdia}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralfarmdia}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralfarmdia}", kpis , series)
-
-        # gravar_s3(f"{destinogeralfarmdia}/atual.json", atual)
-
         
 
     if dados_empresa:
 
         dados = pd.concat(dados_empresa, ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -439,17 +338,7 @@ def main(idempresa, dia):
 
         destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
-
-        # gravar_s3(f"{destinogeralempresadia}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralempresadia}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralempresadia}", kpis , series)
-
-        # gravar_s3(f"{destinogeralempresadia}/atual.json", atual)
 
         
 
@@ -467,25 +356,13 @@ def main(idempresa, dia):
         series = calcular_series(dados, metricas, id_maquina)
 
         destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}")
-        
-
-        # gravar_s3(f"{destinoespecificomes}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinoespecificomes}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinoespecificomes}", kpis , series)
-
-        # gravar_s3(f"{destinoespecificomes}/atual.json" , atual)
 
 
     for id_farm , id_sessao in dados_sessoes_mes:
 
         dados = pd.concat(dados_sessoes_mes[(id_farm, id_sessao)], ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -494,22 +371,12 @@ def main(idempresa, dia):
 
         destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}")  
 
-        # gravar_s3(f"{destinogeralsessaomes}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralsessaomes}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralsessaomes}", kpis  , series)
 
-        # gravar_s3(f"{destinogeralsessaomes}/atual.json" , atual)
 
     for id_farm in dados_farms_mes:
 
         dados = pd.concat(dados_farms_mes[(id_farm)], ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -518,23 +385,13 @@ def main(idempresa, dia):
 
         destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}")
 
-        # gravar_s3(f"{destinogeralfarmmes}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralfarmmes}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralfarmmes}", kpis , series)
 
-        # gravar_s3(f"{destinogeralfarmmes}/atual.json" , atual)
 
 
     if dados_empresa_mes:
 
         dados = pd.concat(dados_empresa_mes, ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
@@ -543,18 +400,7 @@ def main(idempresa, dia):
 
         destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}") 
 
-        # gravar_s3(f"{destinogeralempresames}/kpis.json", kpis)
-
-        # gravar_s3(f"{destinogeralempresames}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralempresames}", kpis , series)
-
-        # gravar_s3(f"{destinogeralempresames}/atual.json" , atual)
-
-
 
 
 
@@ -574,25 +420,14 @@ def main(idempresa, dia):
     
         destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}")
             
-    
-        # gravar_s3(f"{destinoespecificoano}/kpis.json", kpis)
-    
-        # gravar_s3(f"{destinoespecificoano}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinoespecificoano}", kpis , series)
-
-        # gravar_s3(f"{destinoespecificoano}/atual.json" , atual)
     
     
             
     for id_farm , id_sessao in dados_sessoes_ano:
     
         dados = pd.concat(dados_sessoes_ano[(id_farm , id_sessao)], ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -601,22 +436,12 @@ def main(idempresa, dia):
     
         destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}")
 
-        # gravar_s3(f"{destinogeralsessaoano}/kpis.json", kpis)
-    
-        # gravar_s3(f"{destinogeralsessaoano}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
-
         juntar_metricas(f"{destinogeralsessaoano}", kpis , series)
 
-        # gravar_s3(f"{destinogeralsessaoano}/atual.json" , atual)
     
     for id_farm in dados_farms_ano:
     
         dados = pd.concat(dados_farms_ano[(id_farm)], ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -624,24 +449,14 @@ def main(idempresa, dia):
         series = calcular_series(dados, metricas, None)
     
         destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}") 
-    
-        # gravar_s3(f"{destinogeralfarmano}/kpis.json", kpis)
-    
-        # gravar_s3(f"{destinogeralfarmano}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinogeralfarmano}", kpis , series)
 
-        # gravar_s3(f"{destinogeralfarmano}/atual.json" , atual)
     
     
     if dados_empresa_ano:
     
         dados = pd.concat(dados_empresa_ano, ignore_index=True)
-
-        atual = gerar_atual_geral(dados)
     
         metricas = [c for c in dados.columns if c in NUMERICAS]
     
@@ -649,58 +464,37 @@ def main(idempresa, dia):
         series = calcular_series(dados, metricas, None)
     
         destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}") 
-    
-        # gravar_s3(f"{destinogeralempresaano}/kpis.json", kpis)
-    
-        # gravar_s3(f"{destinogeralempresaano}/series.json", {
-        #     "resolucao": "1h",
-        #     "pontos": series
-        # })
 
         juntar_metricas(f"{destinogeralempresaano}", kpis , series)
-
-        # gravar_s3(f"{destinogeralempresaano}/atual.json" , atual)
     
     
-
-
     # JANELAS de 24  7  30 - segue a mesma logica do resto
 
-    for chave in historico_maquinas:
-
-        id_farm, id_sessao, id_maquina = chave
+    for id_farm , id_sessao , id_maquina in historico_maquinas:
 
         dados = pd.concat(
-            historico_maquinas[chave],
+            historico_maquinas[id_farm , id_sessao , id_maquina],
             ignore_index=True
         )
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
-        destino = (
-            f"{idempresa}/{nome_sanitizado}/operacional/especifico/"
-            f"farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}"
-        )
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual(dados))
         gravar_janelas(destino, dados, metricas, id_maquina, agora)
 
 
-    for chave in historico_sessoes:
-
-        id_farm, id_sessao = chave
+    for id_farm , id_sessao in historico_sessoes:
 
         dados = pd.concat(
-            historico_sessoes[chave],
+            historico_sessoes[id_farm , id_sessao],
             ignore_index=True
         )
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
-        destino = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}/sessao={id_sessao}"
-        )
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
         gravar_janelas(destino, dados, metricas, None, agora)
@@ -741,8 +535,7 @@ def main(idempresa, dia):
         gravar_janelas(destino, dados, metricas, None, agora)
 
 
-    #JA CHAMANDO AQUI
-    gravar_catalogo(idempresa)
+    gravar_catalogo(idempresa , nome_sanitizado)
 
 
 
