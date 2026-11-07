@@ -236,12 +236,57 @@ def gravar_catalogo(idempresa , nomesanitizado):
     return maquinas, limites
 
 
-def gerar_status(dados , limites , agora):
-    # limites que vem do gravar catalogo
-    # agora para saber o offline
-    # que vai usar de MINUTOS_OFFLINE la em cima
-    # vai ser feito aqui
-    print("status")
+def gerar_status_geral(dados, limites, agora):
+    # O agora vai ser usado posteriormente a respeito do offline
+
+    vetor = []
+
+    for idmaq in dados["_id_maquina"].unique():
+
+        maquina_dados = dados[dados["_id_maquina"] == idmaq]
+        df = maquina_dados.sort_values("timestamp").iloc[-1]
+
+        componentes = []
+
+        for i in limites:
+
+            if i["id_maquina"] == idmaq and i["monitorado"]:
+
+                limitemin = i["limite_min"]
+                limitemax = i["limite_max"]
+
+                valor = df[MAPA_COMPONENTES[i["componente"].lower()]]
+
+                if pd.isna(valor):
+                    status = "sem_dados"
+                    valor = None
+
+                elif limitemax is not None and valor > float(limitemax):
+                    status = "fora_faixaideal"
+
+                elif limitemin is not None and valor < float(limitemin):
+                    status = "fora_faixaideal"
+
+                else:
+                    status = "normal"
+
+                componentes.append({
+                    "componente": i["componente"].lower(),
+                    "valor": valor,
+                    "status": status
+                })
+
+        vetor.append({
+            "id_maquina": idmaq,
+            "timestamp": formatar_timestamp(df["timestamp"]),
+            "status_geral": (
+                "fora_faixaideal" if any(c["status"] == "fora_faixaideal" for c in componentes)
+                    else "sem_dados" if all(c["status"] == "sem_dados" for c in componentes)
+                    else "normal") ,
+            "componentes": componentes
+        })
+
+    return vetor
 
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
@@ -547,7 +592,42 @@ def main(idempresa, dia):
         gravar_janelas(destino, dados, metricas, None, agora)
 
 
-    gravar_catalogo(idempresa , nome_sanitizado)
+    catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
+
+    for id_farm , id_sessao, id_maquina in historico_maquinas:
+        dados = pd.concat(historico_maquinas[(id_farm , id_sessao , id_maquina)] , ignore_index=True)
+        status = gerar_status_geral(dados , limites , agora)
+
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/tempo_real/status.json")
+
+        gravar_s3(destino , status[0])
+        # coloquei no index 0 pq é uma maquina individual
+
+    for id_farm , id_sessao in historico_sessoes:
+        dados = pd.concat(historico_sessoes[(id_farm , id_sessao)] , ignore_index=True)
+        status = gerar_status_geral(dados , limites , agora)
+
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/tempo_real/status.json")
+
+        gravar_s3(destino , status)
+
+    for id_farm in historico_farms:
+        dados = pd.concat(historico_farms[(id_farm)] , ignore_index=True)
+        status = gerar_status_geral(dados , limites , agora)
+
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/tempo_real/status.json")
+        
+        gravar_s3(destino , status)
+
+    if historico_empresa:
+        dados = pd.concat((historico_empresa) , ignore_index=True)
+
+        status = gerar_status_geral(dados , limites , agora)
+        
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/tempo_real/status.json")
+                
+        gravar_s3(destino , status)
+
 
     print("teste")
 
