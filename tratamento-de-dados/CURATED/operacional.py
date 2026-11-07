@@ -8,6 +8,21 @@ import json
 
 FUSO_LOCAL = "America/Sao_Paulo"
 
+# ver se vai definir isso como os limites ou vai pode escolher frequencia e outras metricas adicionais
+# ou seja provavelmente vai mudar isso
+MAPA_COMPONENTES = {
+    "cpu": "cpu_percent",
+    "ram": "ram_percent",
+    "swap": "swap_memory_percent",
+    "rede": "download_speed",
+    "temperatura": "temperature",
+    "ventoinha": "fans_speed",
+    "disco": "disk",
+    "gpu": "gpu_usage"
+}
+
+MINUTOS_OFFLINE = 10
+
 
 def formatar_timestamp(timestamp):
     return timestamp.tz_convert(FUSO_LOCAL).isoformat(timespec="seconds")
@@ -218,7 +233,15 @@ def gravar_catalogo(idempresa , nomesanitizado):
         limites.append({"id" : mcid , "id_maquina" : id_maquina , "componente" : nomecomponente , "limite_min" : limite_min , "limite_max" : limite_max , "monitorado" : monitorado})
 
     gravar_s3(f"{idempresa}/{nomesanitizado}/operacional/catalogo/limites.json", {"limites": limites})
+    return maquinas, limites
 
+
+def gerar_status(dados , limites , agora):
+    # limites que vem do gravar catalogo
+    # agora para saber o offline
+    # que vai usar de MINUTOS_OFFLINE la em cima
+    # vai ser feito aqui
+    print("status")
 
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
@@ -257,8 +280,8 @@ def main(idempresa, dia):
     historico_farms = {}
     historico_empresa = []
 
-    for mes in meses:
-        dados_maquinas, dados_sessoes, dados_farms, dados_empresa = ler_trusted(f"{idempresa}/{mes.year}/{mes.month:02d}/",maquinas)
+    for mes2 in meses:
+        dados_maquinas, dados_sessoes, dados_farms, dados_empresa = ler_trusted(f"{idempresa}/{mes2.year}/{mes2.month:02d}/",maquinas)
 
         for id_farm , id_sessao , id_maquina in dados_maquinas:
             historico_maquinas.setdefault((id_farm , id_sessao , id_maquina), []).extend(dados_maquinas[(id_farm , id_sessao , id_maquina)])
@@ -280,8 +303,6 @@ def main(idempresa, dia):
       
         dados = pd.concat(dados_maquinas[(id_farm, id_sessao, id_maquina)], ignore_index=True)
 
-        # atual = gerar_atual(dados)
-
         # vai juntar os dfs do vetor em um so
         # tipo se tem (1 , 10 , 1) : [df1 , df2 , df3] -> vai criar um df final com os 3 juntos
 
@@ -294,9 +315,7 @@ def main(idempresa, dia):
 
         juntar_metricas(f"{destinoespecificodia}" , kpis , series)
 
-
-    
-                
+               
     for id_farm , id_sessao in dados_sessoes:
 
         dados = pd.concat(dados_sessoes[(id_farm , id_sessao)], ignore_index=True)
@@ -341,7 +360,6 @@ def main(idempresa, dia):
         juntar_metricas(f"{destinogeralempresadia}", kpis , series)
 
         
-
     #ESTRUTURA PRA SEPARAR POR MES / IDENTICA AO DIARIA, SO MUDA O CAMINHO QUE O PAGINATOR PEGA DO SILVER
 
     dados_maquinas_mes , dados_sessoes_mes , dados_farms_mes , dados_empresa_mes = ler_trusted(prefixo_silver_mes , maquinas)
@@ -401,7 +419,6 @@ def main(idempresa, dia):
         destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}") 
 
         juntar_metricas(f"{destinogeralempresames}", kpis , series)
-
 
 
 
@@ -473,7 +490,7 @@ def main(idempresa, dia):
     for id_farm , id_sessao , id_maquina in historico_maquinas:
 
         dados = pd.concat(
-            historico_maquinas[id_farm , id_sessao , id_maquina],
+            historico_maquinas[(id_farm , id_sessao , id_maquina)],
             ignore_index=True
         )
 
@@ -509,10 +526,7 @@ def main(idempresa, dia):
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
-        destino = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral/"
-            f"farm={id_farm}"
-        )
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
         gravar_janelas(destino, dados, metricas, None, agora)
@@ -527,9 +541,7 @@ def main(idempresa, dia):
 
         metricas = [c for c in dados.columns if c in NUMERICAS]
 
-        destino = (
-            f"{idempresa}/{nome_sanitizado}/operacional/geral"
-        )
+        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
         gravar_janelas(destino, dados, metricas, None, agora)
@@ -537,6 +549,6 @@ def main(idempresa, dia):
 
     gravar_catalogo(idempresa , nome_sanitizado)
 
-
-
     print("teste")
+
+    
