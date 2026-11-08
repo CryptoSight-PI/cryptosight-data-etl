@@ -23,6 +23,8 @@ MAPA_COMPONENTES = {
 
 MINUTOS_OFFLINE = 10
 
+MARGEM_ATENCAO = 0.10
+
 
 def formatar_timestamp(timestamp):
     return timestamp.tz_convert(FUSO_LOCAL).isoformat(timespec="seconds")
@@ -236,8 +238,32 @@ def gravar_catalogo(idempresa , nomesanitizado):
     return maquinas, limites
 
 
+
+def classificar(valor, limitemin, limitemax):
+    if pd.isna(valor):
+        return "sem_dados"
+
+    if limitemax is not None:
+        limitemax = float(limitemax)
+        if valor > limitemax:
+            return "critico"
+
+    if limitemin is not None:
+        limitemin = float(limitemin)
+        if valor < limitemin:
+            return "critico"
+
+    if limitemax is not None and valor > limitemax * (1 - MARGEM_ATENCAO):
+        return "atencao"
+
+    if limitemin is not None and valor < limitemin * (1 + MARGEM_ATENCAO):
+        return "atencao"
+
+    return "normal"
+
+
+
 def gerar_status_geral(dados, limites, agora):
-    # O agora vai ser usado posteriormente a respeito do offline
 
     vetor = []
 
@@ -245,6 +271,8 @@ def gerar_status_geral(dados, limites, agora):
 
         maquina_dados = dados[dados["_id_maquina"] == idmaq]
         df = maquina_dados.sort_values("timestamp").iloc[-1]
+
+        offline = (agora - df["timestamp"]) > pd.Timedelta(minutes=MINUTOS_OFFLINE)
 
         componentes = []
 
@@ -257,18 +285,13 @@ def gerar_status_geral(dados, limites, agora):
 
                 valor = df[MAPA_COMPONENTES[i["componente"].lower()]]
 
-                if pd.isna(valor):
-                    status = "sem_dados"
-                    valor = None
-
-                elif limitemax is not None and valor > float(limitemax):
-                    status = "fora_faixaideal"
-
-                elif limitemin is not None and valor < float(limitemin):
-                    status = "fora_faixaideal"
-
+                if offline:
+                    status = "offline"
                 else:
-                    status = "normal"
+                    status = classificar(valor , limitemin , limitemax)
+
+                if pd.isna(valor):
+                    valor = None
 
                 componentes.append({
                     "componente": i["componente"].lower(),
@@ -279,10 +302,12 @@ def gerar_status_geral(dados, limites, agora):
         vetor.append({
             "id_maquina": idmaq,
             "timestamp": formatar_timestamp(df["timestamp"]),
-            "status_geral": (
-                "fora_faixaideal" if any(c["status"] == "fora_faixaideal" for c in componentes)
-                    else "sem_dados" if all(c["status"] == "sem_dados" for c in componentes)
-                    else "normal") ,
+             "status_geral": (
+                "offline" if offline
+                    else "critico" if any(c["status"] == "critico" for c in componentes)
+                    else "atencao" if any(c["status"] == "atencao" for c in componentes)
+                    else "sem_dados" if componentes and all(c["status"] == "sem_dados" for c in componentes)
+                    else "normal"),
             "componentes": componentes
         })
 
