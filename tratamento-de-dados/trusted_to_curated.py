@@ -39,37 +39,7 @@ def main(id_empresa, dia):
     financeiro(id_empresa , dia)
     operacional(id_empresa , dia)
     rede(id_empresa , dia)
-    # nome_sanitizado = sanitizar_nome(nome_empresa)
-
-    # prefixo_silver = f"{id_empresa}/{particao(dia)}"
-
-    # for nome_arquivo in ARQUIVOS:
-    #     chave_origem = f"{prefixo_silver}/{nome_arquivo}"
-
-    #     resposta = s3.get_object(
-    #         Bucket=bucket_silver,
-    #         Key=chave_origem,
-    #     )
-
-    #     conteudo = resposta["Body"].read()
-
-    #     chave_destino = (
-    #         f"{id_empresa}/{nome_sanitizado}/{nome_arquivo}"
-    #     )
-
-    #     content_type = (
-    #         "application/json"
-    #         if nome_arquivo.endswith(".json")
-    #         else "text/csv"
-    #     )
-
-    #     s3.put_object(
-    #         Bucket=bucket_gold,
-    #         Key=chave_destino,
-    #         Body=conteudo,
-    #         ContentType=content_type,
-    #     )
-
+   
     print(
         f"Gold concluído para empresa {nome_empresa} "
         f"(ID {id_empresa})."
