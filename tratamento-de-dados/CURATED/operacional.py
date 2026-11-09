@@ -332,7 +332,7 @@ def main(idempresa, dia):
             for maquina in buscar_maquinas_sessao(id_sessao):
                 mac = str(maquina["mac_address"]).strip().lower().replace("-", ":")
                 maquinas.append((id_farm, id_sessao, maquina["id_maquina"], mac))
-                # organiza maquinas em tupla, de forma que farm , sessao, maquina . -- (1 , 2 , 5)
+                # organiza maquinas em tupla, de forma que farm , sessao, maquina . -- (1 , 2 , 5 , mac)
 
     agora = pd.Timestamp.now(tz="UTC")
     
