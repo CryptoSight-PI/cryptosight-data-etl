@@ -99,7 +99,7 @@ def juntar_metricas(destino, kpis, series):
     })
 
 
-def gravar_janelas(destino, dados, metricas, idmaquina, agora):
+def gravar_janelas(destino, dados, metricas, idmaquina, agora, limites):
 
     janelas = {
         "24h": agora - pd.Timedelta(hours=24),
@@ -119,8 +119,10 @@ def gravar_janelas(destino, dados, metricas, idmaquina, agora):
 
         kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
         series = calcular_series(dados_filtrados, metricas, idmaquina)
+        picos = gerar_picos(dados_filtrados , limites)
 
         juntar_metricas(f"{destino}/janelas/{nome}", kpis , series)
+        gravar_s3(f"{destino}/janelas/{nome}/picos.json", picos)
 
 
 
@@ -313,8 +315,66 @@ def gerar_status_geral(dados, limites, agora):
 
     return vetor
 
+
+
+def gerar_picos(dados, limites):
+
+    picos = []
+
+    dados = dados.copy()
+
+    dados["hora"] = dados["timestamp"].dt.tz_convert(FUSO_LOCAL).dt.floor("60min")
+
+    for i in NUMERICAS:
+
+        if i not in dados.columns:
+            continue
+
+        for j in limites:
+
+            componente = j["componente"].lower()
+
+            if MAPA_COMPONENTES[componente] != i:
+                continue
+
+            if not j["monitorado"]:
+                continue
+
+            maquina = dados[dados["_id_maquina"] == j["id_maquina"]]
+
+            if maquina.empty:
+                continue
+
+    
+            fora = pd.Series(False, index=maquina.index)
+            # cria uma coluna tudo false
+
+            if j["limite_max"] is not None:
+                fora = fora | (maquina[i] > float(j["limite_max"]))
+                # fala que ou vai ser false essa coluna ou true se passar do limite
+
+            if j["limite_min"] is not None:
+                fora = fora | (maquina[i] < float(j["limite_min"]))
+
+            estouros = maquina[fora]
+            # cria um df estouros em que é a maquina filtrada pelos picos / estouros
+
+            for hora, grupo in estouros.groupby("hora"):
+                picos.append({
+                    "id_maquina": int(j["id_maquina"]),
+                    "componente": componente,
+                    "timestamp" : hora,
+                    "pico": float(grupo[i].max()),
+                    "qtd": int(len(grupo))
+                })
+
+    return picos
+
+
+
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
+    catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
     data = pd.to_datetime(dia)
 
     ano = data.strftime("%Y")
@@ -569,7 +629,7 @@ def main(idempresa, dia):
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual(dados))
-        gravar_janelas(destino, dados, metricas, id_maquina, agora)
+        gravar_janelas(destino, dados, metricas, id_maquina, agora, limites)
 
 
     for id_farm , id_sessao in historico_sessoes:
@@ -584,7 +644,7 @@ def main(idempresa, dia):
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora)
+        gravar_janelas(destino, dados, metricas, None, agora, limites)
 
 
     for id_farm in historico_farms:
@@ -599,7 +659,7 @@ def main(idempresa, dia):
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora)
+        gravar_janelas(destino, dados, metricas, None, agora, limites)
 
 
     if historico_empresa:
@@ -614,10 +674,10 @@ def main(idempresa, dia):
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora)
+        gravar_janelas(destino, dados, metricas, None, agora, limites)
 
 
-    catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
+    
 
     for id_farm , id_sessao, id_maquina in historico_maquinas:
         dados = pd.concat(historico_maquinas[(id_farm , id_sessao , id_maquina)] , ignore_index=True)
