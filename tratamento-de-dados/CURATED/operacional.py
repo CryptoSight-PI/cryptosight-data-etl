@@ -368,6 +368,16 @@ def gerar_picos(dados, limites):
                     "qtd": int(len(grupo))
                 })
 
+    picos = pd.DataFrame(picos)
+
+    if picos.empty:
+        return []
+
+    picos = picos.sort_values("timestamp")
+    picos["timestamp"] = picos["timestamp"].apply(formatar_timestamp)
+
+    picos = picos.to_dict(orient="records")
+
     return picos
 
 
