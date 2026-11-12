@@ -14,7 +14,8 @@ MAPA_COMPONENTES = {
     "cpu": "cpu_percent",
     "ram": "ram_percent",
     "swap": "swap_memory_percent",
-    "rede": "download_speed",
+    # "rede": "download_speed",
+    # fica pra persona de rede
     "temperatura": "temperature",
     "ventoinha": "fans_speed",
     "disco": "disk",
@@ -165,59 +166,46 @@ def gerar_atual_geral(dados):
     }
 
 
-
-
-
 def ler_trusted(prefixo, maquinas):
 
-    dados_maquinas = {}
-    dados_sessoes = {}
-    dados_farms = {}
-    dados_empresa = []
-    
+    vetor = []
+
     paginator = s3.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo):
         for i in page.get("Contents", []):
             key = i["Key"]
             nome_arquivo = key.rsplit("/", 1)[-1]
-    
-                
+
             if not (nome_arquivo.endswith(".csv")):
                 continue
-    
+
             conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
             df = pd.read_csv(io.BytesIO(conteudo), sep=";")
 
-            df["timestamp"] = pd.to_datetime(df["timestamp"],utc=True,format="mixed")
-            
+            if df.empty:
+                continue
+
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+
             if "user" not in df.columns:
                 print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
                 continue
-    
-            usuarios = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
-    
-            for id_farm, id_sessao, id_maquina, mac in maquinas:
-                # cada loop filtra pelo mac / maquina
-                dados = df[usuarios == mac].copy()
-                if dados.empty:
-                    continue
-                dados["_id_maquina"] = id_maquina
-                # adiciona o id da maquina pra conseguir saber qual maquina que é, tipo em dados_sessoes vai ter varios df nesse dicionario, e oq separa os df é o id maquina 
-                    
-                dados_maquinas.setdefault((id_farm, id_sessao , id_maquina), []).append(dados)
-                dados_sessoes.setdefault((id_farm, id_sessao), []).append(dados)
-                # se nao tiver no dicionario, adiciona e atribui um vetor vazio a essa tupla, tipo, (1 , 4) : []
-                #e se ja tiver essa sessao, ou seja, ja tem maquina nessa sessao, apenas adiciona no vetor
-                # tipo assim {
-                    # (1, 10, 100): [],
-                    # (1, 10, 101): []
-                            # }
-                dados_farms.setdefault(id_farm, []).append(dados)
-                dados_empresa.append(dados)
-    
 
-    return dados_maquinas, dados_sessoes, dados_farms, dados_empresa
+            df["mac"] = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
 
+            df = df.merge(maquinas, on="mac")
+
+            if df.empty:
+                continue
+
+            vetor.append(df)
+
+        if not vetor:
+            vazio = pd.DataFrame(columns=["timestamp", "id_farm", "id_sessao", "_id_maquina"])
+            vazio["timestamp"] = pd.to_datetime(vazio["timestamp"], utc=True)
+            return vazio
+
+        return pd.concat(vetor, ignore_index=True)
 
 
 def gravar_catalogo(idempresa , nomesanitizado):
@@ -280,6 +268,9 @@ def gerar_status_geral(dados, limites, agora):
 
         for i in limites:
 
+            if i["componente"].lower() not in MAPA_COMPONENTES:
+                continue
+
             if i["id_maquina"] == idmaq and i["monitorado"]:
 
                 limitemin = i["limite_min"]
@@ -334,7 +325,7 @@ def gerar_picos(dados, limites):
 
             componente = j["componente"].lower()
 
-            if MAPA_COMPONENTES[componente] != i:
+            if MAPA_COMPONENTES.get(componente) != i:
                 continue
 
             if not j["monitorado"]:
@@ -381,7 +372,6 @@ def gerar_picos(dados, limites):
     return picos
 
 
-
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
@@ -396,334 +386,222 @@ def main(idempresa, dia):
     prefixo_silver_ano = f"{idempresa}/{ano}/"
 
     maquinas = []
-    
+
     for id_farm in buscar_farm(idempresa):
         for id_sessao in buscar_sessoes(id_farm):
             for maquina in buscar_maquinas_sessao(id_sessao):
                 mac = str(maquina["mac_address"]).strip().lower().replace("-", ":")
-                maquinas.append((id_farm, id_sessao, maquina["id_maquina"], mac))
-                # organiza maquinas em tupla, de forma que farm , sessao, maquina . -- (1 , 2 , 5 , mac)
+                maquinas.append({
+                    "id_farm": id_farm,
+                    "id_sessao": id_sessao,
+                    "_id_maquina": maquina["id_maquina"],
+                    "mac": mac
+                })
+
+    maquinas = pd.DataFrame(maquinas, columns=["id_farm", "id_sessao", "_id_maquina", "mac"])
 
     agora = pd.Timestamp.now(tz="UTC")
-    
+
     inicio = agora - pd.Timedelta(days=30)
         # pega os ultimos 30 dias
-    
+
     meses = pd.period_range(
         start=inicio.strftime("%Y-%m"),
         end=agora.strftime("%Y-%m"),
         freq="M"
     )
 
-    historico_maquinas = {}
-    historico_sessoes = {}
-    historico_farms = {}
-    historico_empresa = []
+   
+    historico_vetor = []
 
     for mes2 in meses:
-        dados_maquinas, dados_sessoes, dados_farms, dados_empresa = ler_trusted(f"{idempresa}/{mes2.year}/{mes2.month:02d}/",maquinas)
+        historico_vetor.append(ler_trusted(f"{idempresa}/{mes2.year}/{mes2.month:02d}/", maquinas))
 
-        for id_farm , id_sessao , id_maquina in dados_maquinas:
-            historico_maquinas.setdefault((id_farm , id_sessao , id_maquina), []).extend(dados_maquinas[(id_farm , id_sessao , id_maquina)])
-
-        for id_farm , id_sessao in dados_sessoes:
-            historico_sessoes.setdefault((id_farm , id_sessao), []).extend(dados_sessoes[(id_farm , id_sessao)])
-
-        for id_farm in dados_farms:
-            historico_farms.setdefault((id_farm), []).extend(dados_farms[(id_farm)])
-
-        historico_empresa.extend(dados_empresa)      
+    historico = pd.concat(historico_vetor, ignore_index=True)
 
 
-    dados_maquinas , dados_sessoes , dados_farms , dados_empresa = ler_trusted(prefixo_silver , maquinas)
+    dados_dia = ler_trusted(prefixo_silver, maquinas)
 
-    
+    if not dados_dia.empty:
 
-    for id_farm , id_sessao, id_maquina in dados_maquinas:
-      
-        dados = pd.concat(dados_maquinas[(id_farm, id_sessao, id_maquina)], ignore_index=True)
+        metricas = [c for c in dados_dia.columns if c in NUMERICAS]
 
-        # vai juntar os dfs do vetor em um so
-        # tipo se tem (1 , 10 , 1) : [df1 , df2 , df3] -> vai criar um df final com os 3 juntos
-
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        kpis = calcular_kpis(dados, metricas , id_maquina)
-        series = calcular_series(dados, metricas , id_maquina)
-
-        destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
-
-        juntar_metricas(f"{destinoespecificodia}" , kpis , series)
-
-               
-    for id_farm , id_sessao in dados_sessoes:
-
-        dados = pd.concat(dados_sessoes[(id_farm , id_sessao)], ignore_index=True)
-
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-
-        destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}/dia={dia_numero}")             
-
-        juntar_metricas(f"{destinogeralsessaodia}" , kpis , series)
-
-
-
-    for id_farm in dados_farms:
-
-
-        dados = pd.concat(dados_farms[(id_farm)], ignore_index=True)
-
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-
-        destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
-
-        juntar_metricas(f"{destinogeralfarmdia}", kpis , series)
-        
-
-    if dados_empresa:
-
-        dados = pd.concat(dados_empresa, ignore_index=True)
-
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
+        kpis = calcular_kpis(dados_dia, metricas, None)
+        series = calcular_series(dados_dia, metricas, None)
 
         destinogeralempresadia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
         juntar_metricas(f"{destinogeralempresadia}", kpis , series)
 
-        
-    #ESTRUTURA PRA SEPARAR POR MES / IDENTICA AO DIARIA, SO MUDA O CAMINHO QUE O PAGINATOR PEGA DO SILVER
+        for id_farm in dados_dia["id_farm"].unique():
 
-    dados_maquinas_mes , dados_sessoes_mes , dados_farms_mes , dados_empresa_mes = ler_trusted(prefixo_silver_mes , maquinas)
+            dados_farm = dados_dia[dados_dia["id_farm"] == id_farm]
 
-    for id_farm, id_sessao, id_maquina in dados_maquinas_mes:
+            kpis = calcular_kpis(dados_farm, metricas, None)
+            series = calcular_series(dados_farm, metricas, None)
 
-        dados = pd.concat(dados_maquinas_mes[(id_farm, id_sessao, id_maquina)], ignore_index=True)
+            destinogeralfarmdia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+            juntar_metricas(f"{destinogeralfarmdia}", kpis , series)
 
-        kpis = calcular_kpis(dados, metricas, id_maquina)
-        series = calcular_series(dados, metricas, id_maquina)
+            for id_sessao in dados_farm["id_sessao"].unique():
 
-        destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}")
+                dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
-        juntar_metricas(f"{destinoespecificomes}", kpis , series)
+                kpis = calcular_kpis(dados_sessao, metricas, None)
+                series = calcular_series(dados_sessao, metricas, None)
 
+                destinogeralsessaodia = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
-    for id_farm , id_sessao in dados_sessoes_mes:
+                juntar_metricas(f"{destinogeralsessaodia}" , kpis , series)
 
-        dados = pd.concat(dados_sessoes_mes[(id_farm, id_sessao)], ignore_index=True)
+                for id_maquina in dados_sessao["_id_maquina"].unique():
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+                    dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
 
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
+                    kpis = calcular_kpis(dados, metricas, id_maquina)
+                    series = calcular_series(dados, metricas, id_maquina)
 
-        destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}")  
+                    destinoespecificodia = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}/dia={dia_numero}")
 
-        juntar_metricas(f"{destinogeralsessaomes}", kpis  , series)
+                    juntar_metricas(f"{destinoespecificodia}" , kpis , series)
 
+    dados_mes = ler_trusted(prefixo_silver_mes, maquinas)
 
-    for id_farm in dados_farms_mes:
+    if not dados_mes.empty:
 
-        dados = pd.concat(dados_farms_mes[(id_farm)], ignore_index=True)
+        metricas = [c for c in dados_mes.columns if c in NUMERICAS]
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+        kpis = calcular_kpis(dados_mes, metricas, None)
+        series = calcular_series(dados_mes, metricas, None)
 
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-
-        destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}")
-
-        juntar_metricas(f"{destinogeralfarmmes}", kpis , series)
-
-
-
-    if dados_empresa_mes:
-
-        dados = pd.concat(dados_empresa_mes, ignore_index=True)
-
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-
-        destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}") 
+        destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}")
 
         juntar_metricas(f"{destinogeralempresames}", kpis , series)
 
+        for id_farm in dados_mes["id_farm"].unique():
 
+            dados_farm = dados_mes[dados_mes["id_farm"] == id_farm]
 
-    # ESTRUTURA PRO ANO
+            kpis = calcular_kpis(dados_farm, metricas, None)
+            series = calcular_series(dados_farm, metricas, None)
 
-    dados_maquinas_ano , dados_sessoes_ano , dados_farms_ano , dados_empresa_ano = ler_trusted(prefixo_silver_ano , maquinas)
+            destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}")
 
-    for id_farm , id_sessao, id_maquina in dados_maquinas_ano:
-    
-        dados = pd.concat(dados_maquinas_ano[(id_farm , id_sessao , id_maquina)], ignore_index=True)
-    
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-    
-        kpis = calcular_kpis(dados, metricas, id_maquina)
-        series = calcular_series(dados, metricas, id_maquina)
-    
-        destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}")
-            
+            juntar_metricas(f"{destinogeralfarmmes}", kpis , series)
 
-        juntar_metricas(f"{destinoespecificoano}", kpis , series)
-    
-    
-            
-    for id_farm , id_sessao in dados_sessoes_ano:
-    
-        dados = pd.concat(dados_sessoes_ano[(id_farm , id_sessao)], ignore_index=True)
-    
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-    
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-    
-        destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}")
+            for id_sessao in dados_farm["id_sessao"].unique():
 
-        juntar_metricas(f"{destinogeralsessaoano}", kpis , series)
+                dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
-    
-    for id_farm in dados_farms_ano:
-    
-        dados = pd.concat(dados_farms_ano[(id_farm)], ignore_index=True)
-    
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-    
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-    
-        destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}") 
+                kpis = calcular_kpis(dados_sessao, metricas, None)
+                series = calcular_series(dados_sessao, metricas, None)
 
-        juntar_metricas(f"{destinogeralfarmano}", kpis , series)
+                destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}")
 
-    
-    
-    if dados_empresa_ano:
-    
-        dados = pd.concat(dados_empresa_ano, ignore_index=True)
-    
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-    
-        kpis = calcular_kpis(dados, metricas, None)
-        series = calcular_series(dados, metricas, None)
-    
-        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}") 
+                juntar_metricas(f"{destinogeralsessaomes}", kpis , series)
+
+                for id_maquina in dados_sessao["_id_maquina"].unique():
+
+                    dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
+
+                    kpis = calcular_kpis(dados, metricas, id_maquina)
+                    series = calcular_series(dados, metricas, id_maquina)
+
+                    destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}")
+
+                    juntar_metricas(f"{destinoespecificomes}", kpis , series)
+
+    dados_ano = ler_trusted(prefixo_silver_ano, maquinas)
+
+    if not dados_ano.empty:
+
+        metricas = [c for c in dados_ano.columns if c in NUMERICAS]
+
+        kpis = calcular_kpis(dados_ano, metricas, None)
+        series = calcular_series(dados_ano, metricas, None)
+
+        destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}")
 
         juntar_metricas(f"{destinogeralempresaano}", kpis , series)
-    
-    
-    # JANELAS de 24  7  30 - segue a mesma logica do resto
 
-    for id_farm , id_sessao , id_maquina in historico_maquinas:
+        for id_farm in dados_ano["id_farm"].unique():
 
-        dados = pd.concat(
-            historico_maquinas[(id_farm , id_sessao , id_maquina)],
-            ignore_index=True
-        )
+            dados_farm = dados_ano[dados_ano["id_farm"] == id_farm]
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+            kpis = calcular_kpis(dados_farm, metricas, None)
+            series = calcular_series(dados_farm, metricas, None)
 
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
+            destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}")
 
-        gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual(dados))
-        gravar_janelas(destino, dados, metricas, id_maquina, agora, limites)
+            juntar_metricas(f"{destinogeralfarmano}", kpis , series)
 
+            for id_sessao in dados_farm["id_sessao"].unique():
 
-    for id_farm , id_sessao in historico_sessoes:
+                dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
-        dados = pd.concat(
-            historico_sessoes[id_farm , id_sessao],
-            ignore_index=True
-        )
+                kpis = calcular_kpis(dados_sessao, metricas, None)
+                series = calcular_series(dados_sessao, metricas, None)
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+                destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}")
 
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")
+                juntar_metricas(f"{destinogeralsessaoano}", kpis , series)
 
-        gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora, limites)
+                for id_maquina in dados_sessao["_id_maquina"].unique():
 
+                    dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
 
-    for id_farm in historico_farms:
+                    kpis = calcular_kpis(dados, metricas, id_maquina)
+                    series = calcular_series(dados, metricas, id_maquina)
 
-        dados = pd.concat(
-            historico_farms[id_farm],
-            ignore_index=True
-        )
+                    destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}")
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
-
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}")
-
-        gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora, limites)
+                    juntar_metricas(f"{destinoespecificoano}", kpis , series)
 
 
-    if historico_empresa:
 
-        dados = pd.concat(
-            historico_empresa,
-            ignore_index=True
-        )
+    if not historico.empty:
 
-        metricas = [c for c in dados.columns if c in NUMERICAS]
+        metricas = [c for c in historico.columns if c in NUMERICAS]
 
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
-        gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados))
-        gravar_janelas(destino, dados, metricas, None, agora, limites)
+        gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(historico))
+        gravar_janelas(destino, historico, metricas, None, agora, limites)
+        gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(historico, limites, agora))
 
+        for id_farm in historico["id_farm"].unique():
 
-    
+            dados_farm = historico[historico["id_farm"] == id_farm]
 
-    for id_farm , id_sessao, id_maquina in historico_maquinas:
-        dados = pd.concat(historico_maquinas[(id_farm , id_sessao , id_maquina)] , ignore_index=True)
-        status = gerar_status_geral(dados , limites , agora)
+            destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}")
 
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/tempo_real/status.json")
+            gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_farm))
+            gravar_janelas(destino, dados_farm, metricas, None, agora, limites)
+            gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_farm, limites, agora))
 
-        gravar_s3(destino , status[0])
-        # coloquei no index 0 pq é uma maquina individual
+            for id_sessao in dados_farm["id_sessao"].unique():
 
-    for id_farm , id_sessao in historico_sessoes:
-        dados = pd.concat(historico_sessoes[(id_farm , id_sessao)] , ignore_index=True)
-        status = gerar_status_geral(dados , limites , agora)
+                dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/tempo_real/status.json")
+                destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")
 
-        gravar_s3(destino , status)
+                gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_sessao))
+                gravar_janelas(destino, dados_sessao, metricas, None, agora, limites)
+                gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_sessao, limites, agora))
 
-    for id_farm in historico_farms:
-        dados = pd.concat(historico_farms[(id_farm)] , ignore_index=True)
-        status = gerar_status_geral(dados , limites , agora)
+                for id_maquina in dados_sessao["_id_maquina"].unique():
 
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/tempo_real/status.json")
-        
-        gravar_s3(destino , status)
+                    dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
 
-    if historico_empresa:
-        dados = pd.concat((historico_empresa) , ignore_index=True)
+                    destino = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}")
 
-        status = gerar_status_geral(dados , limites , agora)
-        
-        destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/tempo_real/status.json")
-                
-        gravar_s3(destino , status)
+                    gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual(dados))
+                    gravar_janelas(destino, dados, metricas, id_maquina, agora, limites)
 
-
+                    status = gerar_status_geral(dados, limites, agora)
+                    gravar_s3(f"{destino}/tempo_real/status.json", status[0])
+                    
     print("teste")
 
     
