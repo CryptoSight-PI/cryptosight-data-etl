@@ -200,12 +200,12 @@ def ler_trusted(prefixo, maquinas):
 
             vetor.append(df)
 
-        if not vetor:
-            vazio = pd.DataFrame(columns=["timestamp", "id_farm", "id_sessao", "_id_maquina"])
-            vazio["timestamp"] = pd.to_datetime(vazio["timestamp"], utc=True)
-            return vazio
+    if not vetor:
+        vazio = pd.DataFrame(columns=["timestamp", "id_farm", "id_sessao", "_id_maquina"])
+        vazio["timestamp"] = pd.to_datetime(vazio["timestamp"], utc=True)
+        return vazio
 
-        return pd.concat(vetor, ignore_index=True)
+    return pd.concat(vetor, ignore_index=True)
 
 
 def gravar_catalogo(idempresa , nomesanitizado):
