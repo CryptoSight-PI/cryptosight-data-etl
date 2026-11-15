@@ -122,22 +122,23 @@ def coletar_gpu():
             try:
                 energias.append(round(pynvml.nvmlDeviceGetPowerUsage(handle) / 1000, 2))
             except pynvml.NVMLError:
-                pass
+                energias.append(None)
 
             try:
                 fans.append(pynvml.nvmlDeviceGetFanSpeed(handle))
             except pynvml.NVMLError:
-                pass
+                fans.append(None)
     except pynvml.NVMLError as e:
         print(f"Erro ao consultar NVIDIA: {e}")
         return {}
 
     return {
-        "gpu_usage": max(usos) if usos else None,
-        "gpu_energy": round(sum(energias), 2) if energias else None,
-        "gpu_temp": max(temperaturas) if temperaturas else None,
-        "gpu_fan_speed": max(fans) if fans else None,
+        "gpu_usage": usos,
+        "gpu_energy": energias,
+        "gpu_temp": temperaturas,
+        "gpu_fan_speed": fans,
     }
+
 
 
 COLETORES = {
@@ -155,18 +156,14 @@ COLETORES = {
 def colunas_csv():
     colunas = ["user"]
     for cols, _ in COLETORES.values():
-        colunas.extend(cols)
+        for coluna in cols:
+            colunas.append(coluna)
     colunas.append("timestamp")
     return colunas
 
 
 def buscar_monitorados():
-    query = (
-        "select c.nome from maquina m "
-        "join maquina_componente mc on mc.id_maquina = m.id "
-        "join componente c on c.id = mc.id_componente "
-        "where m.mac_address = (%s) and mc.monitorado = 1;"
-    )
+    query = ("select c.nome from maquina m join maquina_componente mc on mc.id_maquina = m.id join componente c on c.id = mc.id_componente where m.mac_address = (%s) and mc.monitorado = 1;")
     cursor.execute(query, [user])
     return {linha[0].lower() for linha in cursor.fetchall()}
 
