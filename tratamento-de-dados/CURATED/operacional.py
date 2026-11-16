@@ -265,6 +265,8 @@ def gerar_status_geral(dados, limites, agora):
         offline = (agora - df["timestamp"]) > pd.Timedelta(minutes=MINUTOS_OFFLINE)
 
         componentes = []
+        maior_z = 0
+        maior_comp = None
 
         for i in limites:
 
@@ -277,6 +279,14 @@ def gerar_status_geral(dados, limites, agora):
                 limitemax = i["limite_max"]
 
                 valor = df[MAPA_COMPONENTES[i["componente"].lower()]]
+                serie = maquina_dados[MAPA_COMPONENTES[i["componente"].lower()]]
+                desvio = serie.std()
+
+                if desvio > 0 and not pd.isna(valor):
+                    z = (valor - serie.mean()) / desvio
+                    if abs(z) > abs(maior_z):
+                        maior_z = z
+                        maior_comp = i["componente"].lower()
 
                 if offline:
                     status = "offline"
@@ -295,12 +305,16 @@ def gerar_status_geral(dados, limites, agora):
         vetor.append({
             "id_maquina": idmaq,
             "timestamp": formatar_timestamp(df["timestamp"]),
-             "status_geral": (
+            "status_geral": (
                 "offline" if offline
                     else "critico" if any(c["status"] == "critico" for c in componentes)
                     else "atencao" if any(c["status"] == "atencao" for c in componentes)
                     else "sem_dados" if componentes and all(c["status"] == "sem_dados" for c in componentes)
                     else "normal"),
+            "leitura_mais_fora_media" : {
+                "componente" : maior_comp,
+                "z_score" : round(float(maior_z) , 2)
+            },
             "componentes": componentes
         })
 
