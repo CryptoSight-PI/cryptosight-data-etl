@@ -4,7 +4,7 @@ from raw_to_trusted import buscar_empresa, particao, NUMERICAS
 import pandas as pd
 import io
 import json
-
+from sklearn.linear_model import LinearRegression
 
 FUSO_LOCAL = "America/Sao_Paulo"
 
@@ -372,6 +372,117 @@ def gerar_picos(dados, limites):
     return picos
 
 
+def gerar_previsoes(dados, limites, agora):
+
+    previsoes = []
+
+    dados = dados.copy()
+    dados["hora"] = dados["timestamp"].dt.floor("60min")
+
+    for id_maquina in dados["_id_maquina"].unique():
+
+        maquina = dados[dados["_id_maquina"] == id_maquina]
+        componentes = []
+
+        for j in limites:
+
+            if j["id_maquina"] != id_maquina or not j["monitorado"]:
+                continue
+
+            componente = j["componente"].lower()
+            coluna = MAPA_COMPONENTES.get(componente)
+
+            if coluna is None:
+                continue
+
+            if j["limite_min"] is None and j["limite_max"] is None:
+                continue
+
+            if coluna not in maquina.columns:
+                continue
+
+            serie = maquina.groupby("hora")[coluna].mean().dropna().tail(48)
+
+            if len(serie) < 12:
+                continue
+
+            x = (
+                (serie.index - serie.index[0]).total_seconds() / 3600
+            ).values.reshape(-1, 1)
+
+            y = serie.values
+
+            modelo = LinearRegression().fit(x, y)
+
+            valor_atual = float(y[-1])
+            subida = float(modelo.coef_[0])
+
+            horas = None
+            limite = None
+
+            if j["limite_max"] is not None and subida > 0:
+
+                if valor_atual < float(j["limite_max"]):
+
+                    horas = (float(j["limite_max"]) - valor_atual) / subida
+                    limite = float(j["limite_max"])
+
+            if j["limite_min"] is not None and subida < 0:
+
+                if valor_atual > float(j["limite_min"]):
+
+                    horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
+
+                    if horas is None or horas_min < horas:
+                        horas = horas_min
+                        limite = float(j["limite_min"])
+
+            if horas is None or horas > 72:
+                continue
+
+            r2 = float(modelo.score(x, y))
+
+            if r2 >= 0.7:
+                qualidade_tendencia = "boa"
+            elif r2 >= 0.4:
+                qualidade_tendencia = "moderada"
+            else:
+                qualidade_tendencia = "baixa"
+
+            componentes.append({
+                "componente": componente,
+                "valor_atual": round(valor_atual, 2),
+                "valor_limite": limite,
+                "direcao": "subindo" if subida > 0 else "descendo",
+                "subida_por_hora": round(subida, 3),
+                "valor_previsto_24h": round(valor_atual + subida * 24, 2),
+                "horas_ate_limite": round(horas, 1),
+                "horario_estimado": formatar_timestamp(
+                    serie.index[-1] + pd.Timedelta(hours=horas)
+                ),
+                "r2": round(r2, 3),
+                "qualidade_tendencia": qualidade_tendencia
+            })
+
+        componentes = sorted(
+            componentes,
+            key=lambda c: c["horas_ate_limite"]
+        )
+
+        if componentes:
+            previsoes.append({
+                "id_maquina": int(id_maquina),
+                "proxima_ocorrencia_em_horas": componentes[0]["horas_ate_limite"],
+                "componente_com_maior_risco": componentes[0]["componente"],
+                "componentes": componentes
+            })
+
+    return sorted(
+        previsoes,
+        key=lambda p: p["proxima_ocorrencia_em_horas"]
+    )
+
+
 def main(idempresa, dia):
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
@@ -569,6 +680,8 @@ def main(idempresa, dia):
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(historico))
         gravar_janelas(destino, historico, metricas, None, agora, limites)
         gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(historico, limites, agora))
+        previsoes = gerar_previsoes(historico, limites, agora)
+        gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
 
         for id_farm in historico["id_farm"].unique():
 
@@ -579,6 +692,8 @@ def main(idempresa, dia):
             gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_farm))
             gravar_janelas(destino, dados_farm, metricas, None, agora, limites)
             gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_farm, limites, agora))
+            # previsoes = gerar_previsoes(dados_farm, limites, agora)
+            # gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
 
             for id_sessao in dados_farm["id_sessao"].unique():
 
@@ -589,6 +704,8 @@ def main(idempresa, dia):
                 gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_sessao))
                 gravar_janelas(destino, dados_sessao, metricas, None, agora, limites)
                 gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_sessao, limites, agora))
+                # previsoes = gerar_previsoes(dados_sessao, limites, agora)
+                # gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
 
                 for id_maquina in dados_sessao["_id_maquina"].unique():
 
@@ -601,6 +718,8 @@ def main(idempresa, dia):
 
                     status = gerar_status_geral(dados, limites, agora)
                     gravar_s3(f"{destino}/tempo_real/status.json", status[0])
+                    previsoes = gerar_previsoes(dados, limites, agora)
+                    gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
                     
     print("teste")
 
