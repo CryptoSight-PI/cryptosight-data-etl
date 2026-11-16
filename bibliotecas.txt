@@ -7,3 +7,4 @@ python-dotenv
 pynvml
 boto3
 nvidia-ml-py
+scikit-learn
