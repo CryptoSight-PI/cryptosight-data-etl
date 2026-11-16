@@ -303,7 +303,7 @@ def gerar_status_geral(dados, limites, agora):
                 })
 
         vetor.append({
-            "id_maquina": idmaq,
+            "id_maquina": int(idmaq),
             "timestamp": formatar_timestamp(df["timestamp"]),
             "status_geral": (
                 "offline" if offline
