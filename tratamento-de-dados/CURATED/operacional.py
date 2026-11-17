@@ -386,6 +386,7 @@ def gerar_picos(dados, limites):
     return picos
 
 
+
 def gerar_previsoes(dados, limites, agora):
 
     previsoes = []
@@ -415,10 +416,43 @@ def gerar_previsoes(dados, limites, agora):
             if coluna not in maquina.columns:
                 continue
 
-            #usa o tail para pegar apenas um numero de horas fixas
             serie = maquina.groupby("hora")[coluna].mean().dropna().tail(48)
 
-            if len(serie) < 12:
+
+            #sem leitura ainda retorna json
+            if serie.empty:
+                componentes.append({
+                    "componente": componente,
+                    "valor_atual": None,
+                    "valor_limite": None,
+                    "direcao": "sem_dados",
+                    "subida_por_hora": None,
+                    "valores_previstos": {},
+                    "horas_ate_limite": None,
+                    "horario_estimado": None,
+                    "r2": None,
+                    "qualidade_tendencia": "baixa"
+                })
+                continue
+
+            valor_atual = float(serie.iloc[-1])
+
+            
+            if len(serie) < 6:
+
+                componentes.append({
+                    "componente": componente,
+                    "valor_atual": round(valor_atual, 2),
+                    "valor_limite": None,
+                    "direcao": "dados_insuficientes",
+                    "subida_por_hora": None,
+                    "valores_previstos": {},
+                    "horas_ate_limite": None,
+                    "horario_estimado": None,
+                    "r2": None,
+                    "qualidade_tendencia": "baixa"
+                })
+
                 continue
 
             x = (
@@ -429,34 +463,34 @@ def gerar_previsoes(dados, limites, agora):
 
             modelo = LinearRegression().fit(x, y)
 
-            valor_atual = float(y[-1])
             subida = float(modelo.coef_[0])
+
 
             horas = None
             limite = None
 
-            if j["limite_max"] is not None and subida > 0:
+            if j["limite_max"] is not None and valor_atual >= float(j["limite_max"]):
+                horas = 0
+                limite = float(j["limite_max"])
 
-                #nao faz sentido prever algo que ja passou do limite max
-                if valor_atual < float(j["limite_max"]):
+            elif j["limite_min"] is not None and valor_atual <= float(j["limite_min"]):
+                horas = 0
+                limite = float(j["limite_min"])
+
+            else:
+
+                if j["limite_max"] is not None and subida > 0:
 
                     horas = (float(j["limite_max"]) - valor_atual) / subida
                     limite = float(j["limite_max"])
 
-            if j["limite_min"] is not None and subida < 0:
-
-                #assim como nao faz sentido prever algo que ja passou do minimo 
-                if valor_atual > float(j["limite_min"]):
+                if j["limite_min"] is not None and subida < 0:
 
                     horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
 
                     if horas is None or horas_min < horas:
                         horas = horas_min
                         limite = float(j["limite_min"])
-
-            #se esta muito distante nao faz sentido prever, ta muito longe essa previsao
-            if horas is None or horas > 72:
-                continue
 
             r2 = float(modelo.score(x, y))
 
@@ -468,6 +502,9 @@ def gerar_previsoes(dados, limites, agora):
                 qualidade_tendencia = "baixa"
 
 
+            if horas is not None and horas > 72:
+                horas = None
+                limite = None
 
             componentes.append({
                 "componente": componente,
@@ -476,14 +513,16 @@ def gerar_previsoes(dados, limites, agora):
                 "direcao": "subindo" if subida > 0 else "descendo" if subida < 0 else "estavel",
                 "subida_por_hora": round(subida, 3),
                 "valores_previstos": {
-                    "6h" : round(valor_atual + subida * 6 , 2),
-                    "12h" : round(valor_atual + subida * 12 , 2),
-                    "24h" : round(valor_atual + subida * 24, 2),
-                    "48h" : round(valor_atual + subida * 48 , 2)
-                }, 
-                "horas_ate_limite": round(horas, 1),
-                "horario_estimado": formatar_timestamp(
-                    serie.index[-1] + pd.Timedelta(hours=horas)
+                    "6h": round(valor_atual + subida * 6, 2),
+                    "12h": round(valor_atual + subida * 12, 2),
+                    "24h": round(valor_atual + subida * 24, 2),
+                    "48h": round(valor_atual + subida * 48, 2)
+                },
+                "horas_ate_limite": round(horas, 1) if horas is not None else None,
+                "horario_estimado": (
+                    formatar_timestamp(
+                        serie.index[-1] + pd.Timedelta(hours=horas)
+                    ) if horas is not None else None
                 ),
                 "r2": round(r2, 3),
                 "qualidade_tendencia": qualidade_tendencia
@@ -491,7 +530,11 @@ def gerar_previsoes(dados, limites, agora):
 
         componentes = sorted(
             componentes,
-            key=lambda c: c["horas_ate_limite"]
+            key=lambda c: (
+                c["horas_ate_limite"]
+                if c["horas_ate_limite"] is not None
+                else float("inf")
+            )
         )
 
         if componentes:
@@ -504,8 +547,14 @@ def gerar_previsoes(dados, limites, agora):
 
     return sorted(
         previsoes,
-        key=lambda p: p["proxima_ocorrencia_em_horas"]
+        key=lambda p: (
+            p["proxima_ocorrencia_em_horas"]
+            if p["proxima_ocorrencia_em_horas"] is not None
+            else float("inf")
+        )
     )
+
+
 
 
 def main(idempresa, dia):
