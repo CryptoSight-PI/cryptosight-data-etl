@@ -469,28 +469,21 @@ def gerar_previsoes(dados, limites, agora):
             horas = None
             limite = None
 
-            if j["limite_max"] is not None and valor_atual >= float(j["limite_max"]):
-                horas = 0
-                limite = float(j["limite_max"])
+            if j["limite_max"] is not None and subida > 0:
 
-            elif j["limite_min"] is not None and valor_atual <= float(j["limite_min"]):
-                horas = 0
-                limite = float(j["limite_min"])
+                horas_max = (float(j["limite_max"]) - valor_atual) / subida
 
-            else:
-
-                if j["limite_max"] is not None and subida > 0:
-
-                    horas = (float(j["limite_max"]) - valor_atual) / subida
+                if horas_max > 0:
+                    horas = horas_max
                     limite = float(j["limite_max"])
 
-                if j["limite_min"] is not None and subida < 0:
+            if j["limite_min"] is not None and subida < 0:
 
-                    horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
+                horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
 
-                    if horas is None or horas_min < horas:
-                        horas = horas_min
-                        limite = float(j["limite_min"])
+                if horas_min > 0 and (horas is None or horas_min < horas):
+                    horas = horas_min
+                    limite = float(j["limite_min"])
 
             r2 = float(modelo.score(x, y))
 
@@ -538,10 +531,21 @@ def gerar_previsoes(dados, limites, agora):
         )
 
         if componentes:
+            previsoes_validas = [
+                c for c in componentes
+                if c["horas_ate_limite"] is not None
+            ]
+
             previsoes.append({
                 "id_maquina": int(id_maquina),
-                "proxima_ocorrencia_em_horas": componentes[0]["horas_ate_limite"],
-                "componente_com_maior_risco": componentes[0]["componente"],
+                "proxima_ocorrencia_em_horas": (
+                    previsoes_validas[0]["horas_ate_limite"]
+                    if previsoes_validas else None
+                ),
+                "componente_com_maior_risco": (
+                    previsoes_validas[0]["componente"]
+                    if previsoes_validas else None
+                ),
                 "componentes": componentes
             })
 
