@@ -20,13 +20,6 @@ def formatar_timestamp(timestamp):
 
 
 def criar_dados_mock(agora):
-    """
-    Cria 72 horas de dados fictícios para uma rig.
-
-    Temperatura: tendência de subida.
-    RAM: praticamente estável.
-    GPU: oscila, sem tendência forte.
-    """
 
     timestamps = pd.date_range(
         end=agora,
@@ -51,9 +44,6 @@ def criar_dados_mock(agora):
 
 
 def criar_limites_mock():
-    """
-    Simula os limites que viriam do catálogo do Gold/MySQL.
-    """
 
     return [
         {

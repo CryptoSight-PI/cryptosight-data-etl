@@ -415,6 +415,7 @@ def gerar_previsoes(dados, limites, agora):
             if coluna not in maquina.columns:
                 continue
 
+            #usa o tail para pegar apenas um numero de horas fixas
             serie = maquina.groupby("hora")[coluna].mean().dropna().tail(48)
 
             if len(serie) < 12:
@@ -436,6 +437,7 @@ def gerar_previsoes(dados, limites, agora):
 
             if j["limite_max"] is not None and subida > 0:
 
+                #nao faz sentido prever algo que ja passou do limite max
                 if valor_atual < float(j["limite_max"]):
 
                     horas = (float(j["limite_max"]) - valor_atual) / subida
@@ -443,6 +445,7 @@ def gerar_previsoes(dados, limites, agora):
 
             if j["limite_min"] is not None and subida < 0:
 
+                #assim como nao faz sentido prever algo que ja passou do minimo 
                 if valor_atual > float(j["limite_min"]):
 
                     horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
@@ -451,6 +454,7 @@ def gerar_previsoes(dados, limites, agora):
                         horas = horas_min
                         limite = float(j["limite_min"])
 
+            #se esta muito distante nao faz sentido prever, ta muito longe essa previsao
             if horas is None or horas > 72:
                 continue
 
@@ -463,13 +467,20 @@ def gerar_previsoes(dados, limites, agora):
             else:
                 qualidade_tendencia = "baixa"
 
+
+
             componentes.append({
                 "componente": componente,
                 "valor_atual": round(valor_atual, 2),
                 "valor_limite": limite,
-                "direcao": "subindo" if subida > 0 else "descendo",
+                "direcao": "subindo" if subida > 0 else "descendo" if subida < 0 else "estavel",
                 "subida_por_hora": round(subida, 3),
-                "valor_previsto_24h": round(valor_atual + subida * 24, 2),
+                "valores_previstos": {
+                    "6h" : round(valor_atual + subida * 6 , 2),
+                    "12h" : round(valor_atual + subida * 12 , 2),
+                    "24h" : round(valor_atual + subida * 24, 2),
+                    "48h" : round(valor_atual + subida * 48 , 2)
+                }, 
                 "horas_ate_limite": round(horas, 1),
                 "horario_estimado": formatar_timestamp(
                     serie.index[-1] + pd.Timedelta(hours=horas)
@@ -706,8 +717,6 @@ def main(idempresa, dia):
             gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_farm))
             gravar_janelas(destino, dados_farm, metricas, None, agora, limites)
             gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_farm, limites, agora))
-            # previsoes = gerar_previsoes(dados_farm, limites, agora)
-            # gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
 
             for id_sessao in dados_farm["id_sessao"].unique():
 
@@ -718,8 +727,6 @@ def main(idempresa, dia):
                 gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_sessao))
                 gravar_janelas(destino, dados_sessao, metricas, None, agora, limites)
                 gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_sessao, limites, agora))
-                # previsoes = gerar_previsoes(dados_sessao, limites, agora)
-                # gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
 
                 for id_maquina in dados_sessao["_id_maquina"].unique():
 
