@@ -392,7 +392,7 @@ def gerar_previsoes(dados, limites, agora):
     previsoes = []
 
     dados = dados.copy()
-    dados["hora"] = dados["timestamp"].dt.floor("60min")
+    dados["hora"] = dados["timestamp"].dt.tz_convert(FUSO_LOCAL).dt.floor("60min")
 
     for id_maquina in dados["_id_maquina"].unique():
 
@@ -416,10 +416,15 @@ def gerar_previsoes(dados, limites, agora):
             if coluna not in maquina.columns:
                 continue
 
+            ultima_leitura = maquina["timestamp"].max()
+
+            if (agora - ultima_leitura) > pd.Timedelta(hours=1):
+                continue
+
             serie = maquina.groupby("hora")[coluna].mean().dropna().tail(48)
 
+            
 
-            #sem leitura ainda retorna json
             if serie.empty:
                 componentes.append({
                     "componente": componente,
@@ -437,9 +442,7 @@ def gerar_previsoes(dados, limites, agora):
 
             valor_atual = float(serie.iloc[-1])
 
-            
             if len(serie) < 6:
-
                 componentes.append({
                     "componente": componente,
                     "valor_atual": round(valor_atual, 2),
@@ -452,9 +455,9 @@ def gerar_previsoes(dados, limites, agora):
                     "r2": None,
                     "qualidade_tendencia": "baixa"
                 })
-
                 continue
 
+            #cmc da regressao e da previsao por si so
             x = (
                 (serie.index - serie.index[0]).total_seconds() / 3600
             ).values.reshape(-1, 1)
@@ -464,28 +467,76 @@ def gerar_previsoes(dados, limites, agora):
             modelo = LinearRegression().fit(x, y)
 
             subida = float(modelo.coef_[0])
-
-
-            horas = None
-            limite = None
-
-            if j["limite_max"] is not None and subida > 0:
-
-                horas_max = (float(j["limite_max"]) - valor_atual) / subida
-
-                if horas_max > 0:
-                    horas = horas_max
-                    limite = float(j["limite_max"])
-
-            if j["limite_min"] is not None and subida < 0:
-
-                horas_min = (valor_atual - float(j["limite_min"])) / abs(subida)
-
-                if horas_min > 0 and (horas is None or horas_min < horas):
-                    horas = horas_min
-                    limite = float(j["limite_min"])
-
             r2 = float(modelo.score(x, y))
+
+            
+            limite_atencao_max = (float(j["limite_max"]) * (1 - MARGEM_ATENCAO) if j["limite_max"] is not None else None)
+
+            limite_atencao_min = (float(j["limite_min"]) * (1 + MARGEM_ATENCAO) if j["limite_min"] is not None else None)
+
+           
+
+            horas_atencao = None
+            horas_critico = None
+
+            if j["limite_max"] is not None and valor_atual >= float(j["limite_max"]):
+                horas_critico = 0
+            
+            elif j["limite_min"] is not None and valor_atual <= float(j["limite_min"]):
+                horas_critico = 0
+
+            if subida > 0 and j["limite_max"] is not None:
+
+                if valor_atual < limite_atencao_max:
+                    horas_atencao = (limite_atencao_max - valor_atual) / subida
+                    #subida é quanto aumenta por hora
+                    #ou seja pega quanto falta ate o limite e divide por quanto aumenta por hora
+                    #ex: limite= 90  valor = 70    subida: 5 por hora
+                    #90 - 70 = 20;   20 / 5 = 4;     falta 4 horas pra atingir o limite
+                else:
+                    horas_atencao = 0
+
+                if valor_atual < float(j["limite_max"]):
+                    horas_critico = (float(j["limite_max"]) - valor_atual) / subida
+                else:
+                    horas_critico = 0
+
+    
+            elif subida < 0 and j["limite_min"] is not None:
+
+                if valor_atual > limite_atencao_min:
+                    horas_atencao = (limite_atencao_min - valor_atual) / subida
+                else:
+                    horas_atencao = 0
+
+                if valor_atual > float(j["limite_min"]):
+                    horas_critico = (float(j["limite_min"]) - valor_atual) / subida
+                else:
+                    horas_critico = 0
+
+            
+            if horas_atencao is not None and not 0 <= horas_atencao <= 72:
+                horas_atencao = None
+
+            if horas_critico is not None and not 0 <= horas_critico <= 72:
+                horas_critico = None
+
+
+            #declara tudo no nivel de atencao
+            horas = horas_atencao
+            limite = limite_atencao_max if subida > 0 else limite_atencao_min
+            nivel = "atencao"
+
+            #se as condicoes do critico baterem =, vira critco
+            if horas_critico == 0 or (horas_critico is not None and(horas is None or horas_critico < horas)):
+                horas = horas_critico
+                limite = j["limite_max"] if subida > 0 else j["limite_min"]
+                nivel = "critico"
+
+            if horas is None:
+                limite = None
+            elif limite is not None:
+                limite = float(limite)
 
             if r2 >= 0.7:
                 qualidade_tendencia = "boa"
@@ -495,10 +546,6 @@ def gerar_previsoes(dados, limites, agora):
                 qualidade_tendencia = "baixa"
 
 
-            if horas is not None and horas > 72:
-                horas = None
-                limite = None
-
             componentes.append({
                 "componente": componente,
                 "valor_atual": round(valor_atual, 2),
@@ -506,36 +553,32 @@ def gerar_previsoes(dados, limites, agora):
                 "direcao": "subindo" if subida > 0 else "descendo" if subida < 0 else "estavel",
                 "subida_por_hora": round(subida, 3),
                 "valores_previstos": {
-                    "6h": round(valor_atual + subida * 6, 2),
-                    "12h": round(valor_atual + subida * 12, 2),
-                    "24h": round(valor_atual + subida * 24, 2),
-                    "48h": round(valor_atual + subida * 48, 2)
+                    "6h": round(max(0, valor_atual + subida * 6), 2),
+                    "12h": round(max(0, valor_atual + subida * 12), 2),
+                    "24h": round(max(0, valor_atual + subida * 24), 2),
+                    "48h": round(max(0, valor_atual + subida * 48), 2)
                 },
                 "horas_ate_limite": round(horas, 1) if horas is not None else None,
-                "horario_estimado": (
-                    formatar_timestamp(
-                        serie.index[-1] + pd.Timedelta(hours=horas)
-                    ) if horas is not None else None
-                ),
+                "horario_estimado": (formatar_timestamp(ultima_leitura + pd.Timedelta(hours=horas)) if horas is not None else None),
+                "horas_ate_atencao": round(horas_atencao, 1) if horas_atencao is not None else None,
+                "horas_ate_critico": round(horas_critico, 1) if horas_critico is not None else None,
+                "nivel_proximo_risco": nivel if horas is not None else None,
                 "r2": round(r2, 3),
                 "qualidade_tendencia": qualidade_tendencia
             })
 
-        componentes = sorted(
-            componentes,
-            key=lambda c: (
-                c["horas_ate_limite"]
-                if c["horas_ate_limite"] is not None
-                else float("inf")
-            )
-        )
+    
+        if componentes:
+            tabela = pd.DataFrame(componentes).sort_values("horas_ate_limite", ascending=True, na_position="last")
+            tabela = tabela.astype(object).where(tabela.notna(), None)
+            componentes = tabela.to_dict(orient="records")
 
         if componentes:
-            previsoes_validas = [
-                c for c in componentes
-                if c["horas_ate_limite"] is not None
-            ]
-
+            previsoes_validas = []
+            for c in componentes:
+                if c["horas_ate_limite"] is not None:
+                    previsoes_validas.append(c)
+         
             previsoes.append({
                 "id_maquina": int(id_maquina),
                 "proxima_ocorrencia_em_horas": (
@@ -549,14 +592,12 @@ def gerar_previsoes(dados, limites, agora):
                 "componentes": componentes
             })
 
-    return sorted(
-        previsoes,
-        key=lambda p: (
-            p["proxima_ocorrencia_em_horas"]
-            if p["proxima_ocorrencia_em_horas"] is not None
-            else float("inf")
-        )
-    )
+    if not previsoes:
+        return []
+
+    tabela = pd.DataFrame(previsoes).sort_values("proxima_ocorrencia_em_horas", ascending=True, na_position="last")
+    tabela = tabela.astype(object).where(tabela.notna(), None)
+    return tabela.to_dict(orient="records")
 
 
 
