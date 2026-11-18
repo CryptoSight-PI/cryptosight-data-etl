@@ -27,9 +27,11 @@ MINUTOS_OFFLINE = 10
 MARGEM_ATENCAO = 0.10
 
 
+#deixa o timestamp para o fuso local e chega ate segundos (tira o milisegundos)
 def formatar_timestamp(timestamp):
     return timestamp.tz_convert(FUSO_LOCAL).isoformat(timespec="seconds")
 
+#coloca o conteudo no s3, com base na chave / prefixo
 def gravar_s3(chave, conteudo):
     s3.put_object(
         Bucket=bucket_gold,
@@ -39,7 +41,9 @@ def gravar_s3(chave, conteudo):
     )
 
 
+#calculo de kpis de um df com base nas metricas (usada para nao fazer calculo de timestamp, user...)
 def calcular_kpis(dados, metricas , idmaquina):
+
     kpis = {}
     for i in metricas:
         serie = dados[i].dropna()
@@ -54,10 +58,11 @@ def calcular_kpis(dados, metricas , idmaquina):
                         "max_em": None,
                         "max_maquina_id": None,
                     }
+            #aqui deixa tudo none, pq se nao vim dado, coloca como none, para nao bugar logica de grafico etc...
             continue
 
 
-        #indice do max (maior valor)
+        #indice do max (maior valor), ou seja, vai, no df espeficicado retornar o index do maior valor dessa serie(df na coluna da vez)
         pico = serie.idxmax()
  
         kpis[i] = {
@@ -69,20 +74,21 @@ def calcular_kpis(dados, metricas , idmaquina):
             "desvio_padrao": float(serie.std()) if serie.count() > 1 else None,
             "max_em": formatar_timestamp(dados.loc[pico, "timestamp"]),
             "max_maquina_id": int(idmaquina) if idmaquina is not None else int(dados.loc[pico , "_id_maquina"]),
+            #o .loc usa como parametro, index e nome da coluna, ou seja,vai naquele index e naquela coluna retornar o valor
         }
     return kpis
 
-
-def calcular_series(dados, metricas , idmaquina):
+#calculo de series, progressao do tempo
+def calcular_series(dados, metricas , idmaquina , resolucao="1h"):
 
     dados = dados.copy()
 
-    dados["timestamp_local"] = (
-        dados["timestamp"].dt.tz_convert(FUSO_LOCAL)
-    )
+    dados["timestamp_local"] = (dados["timestamp"].dt.tz_convert(FUSO_LOCAL))
+    # dados["timestamp_local"] = formatar_timestamp(dados["timestamp"].dt)
 
     listaserie = []
-    for hora, df in dados.groupby(dados["timestamp_local"].dt.floor("60min")):
+    for hora, df in dados.groupby(dados["timestamp_local"].dt.floor(resolucao)):
+    #aqui ele agrupa por resolucao(hora, dia , sla, depende do retorno, o padrao é 1 hora, caso nao declare), ou seja, o primeira retorno é a hora e o df daquela hora, tipo no mysql mesmo, exemplo, 1h : df1 ; 2h: df2
         listaserie.append({
             "t": formatar_timestamp(hora),
             "amostras": len(df),
@@ -90,39 +96,51 @@ def calcular_series(dados, metricas , idmaquina):
         })
     return listaserie
 
-def juntar_metricas(destino, kpis, series):
+def juntar_metricas(destino, kpis, series, resolucao="1h"):
+    #junta as kpis e as series num metrica.json
     gravar_s3(f"{destino}/metricas.json", {
         "kpis": kpis,
         "serie": {
-            "resolucao": "1h",
+            "resolucao": resolucao,
             "pontos": series
         }
     })
 
 
 def gravar_janelas(destino, dados, metricas, idmaquina, agora, limites):
-
+    #aqui é essencial, pois tem as 3 janelas que serao usadas no front
+    #nesse dicionario é passado o nome (horario) e as configs dele, em que inicio é onde inicia esse intervalo, ou seja, pra 24 horas, é 1 dia atras
+    #e a resolucao que sera usada para melhorar a plotagem em grafico usando a resolucao em kpis e series
     janelas = {
-        "24h": agora - pd.Timedelta(hours=24),
-        "7d": agora - pd.Timedelta(days=7),
-        "30d": agora - pd.Timedelta(days=30)
+        "24h": {
+            "inicio": agora - pd.Timedelta(hours=24),
+            "resolucao": "1h"
+        },
+        "7d": {
+            "inicio": agora - pd.Timedelta(days=7),
+            "resolucao": "6h"
+        },
+        "30d": {
+            "inicio": agora - pd.Timedelta(days=30),
+            "resolucao": "1D"
+        }
     }
 
     for nome, limite in janelas.items():
 
-        dados_filtrados = dados[
-            (dados["timestamp"] >= limite) &
-            (dados["timestamp"] <= agora)
-        ]
+        #aqui os dados sao filtrados para retornar so oq a janela pede, ou seja 24 horas, so os dados das 24 horas
+        dados_filtrados = dados[ (dados["timestamp"] >= limite["inicio"]) & (dados["timestamp"] <= agora)]
 
         if dados_filtrados.empty:
             continue
 
-        kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
-        series = calcular_series(dados_filtrados, metricas, idmaquina)
-        picos = gerar_picos(dados_filtrados , limites)
+        resolucao = limite["resolucao"]
 
-        juntar_metricas(f"{destino}/janelas/{nome}", kpis , series)
+        kpis = calcular_kpis(dados_filtrados, metricas, idmaquina)
+        series = calcular_series(dados_filtrados, metricas, idmaquina, resolucao)
+        picos = gerar_picos(dados_filtrados , limites, resolucao)
+
+        juntar_metricas(f"{destino}/janelas/{nome}", kpis , series, resolucao)
         gravar_s3(f"{destino}/janelas/{nome}/picos.json", picos)
 
 
@@ -322,13 +340,13 @@ def gerar_status_geral(dados, limites, agora):
 
 
 
-def gerar_picos(dados, limites):
+def gerar_picos(dados, limites, resolucao="1h"):
 
     picos = []
 
     dados = dados.copy()
 
-    dados["hora"] = dados["timestamp"].dt.tz_convert(FUSO_LOCAL).dt.floor("60min")
+    dados["hora"] = dados["timestamp"].dt.tz_convert(FUSO_LOCAL).dt.floor(resolucao)
 
     for i in NUMERICAS:
 
@@ -581,14 +599,8 @@ def gerar_previsoes(dados, limites, agora):
          
             previsoes.append({
                 "id_maquina": int(id_maquina),
-                "proxima_ocorrencia_em_horas": (
-                    previsoes_validas[0]["horas_ate_limite"]
-                    if previsoes_validas else None
-                ),
-                "componente_com_maior_risco": (
-                    previsoes_validas[0]["componente"]
-                    if previsoes_validas else None
-                ),
+                "proxima_ocorrencia_em_horas": ( previsoes_validas[0]["horas_ate_limite"] if previsoes_validas else None),
+                "componente_com_maior_risco": (previsoes_validas[0]["componente"] if previsoes_validas else None),
                 "componentes": componentes
             })
 
