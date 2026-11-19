@@ -38,7 +38,7 @@ def main(id_empresa, dia):
 
     financeiro(id_empresa , dia)
     operacional(id_empresa , dia)
-    # rede(id_empresa , dia)
+    # rede()
    
     print(
         f"Gold concluído para empresa {nome_empresa} "

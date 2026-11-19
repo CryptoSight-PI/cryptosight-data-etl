@@ -1,35 +1,85 @@
-from configenvironment import s3 , bucket_silver , bucket_gold , bucket_bronze , cursor
-# from trusted_to_curated import sanitizar_nome, ARQUIVOS
-from CURATED.utils import sanitizar_nome , ARQUIVOS
-from raw_to_trusted import buscar_empresa, particao
+"""
+Promove registros do bucket Trusted (silver) para Curated (gold) e insere
+os registros limpos no banco de dados MySQL quando possível.
 
-def main(idempresa, dia):
-    nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
-    prefixo_silver = f"{idempresa}/{particao(dia)}/"
+Usage:
+  Configure variáveis de ambiente: BUCKET_TRUSTED (ou BUCKET_SILVER),
+  BUCKET_CURATED (ou BUCKET_GOLD), S3_ENDPOINT opcional, ou deixe
+O script tenta inserir em uma tabela `medicao` com colunas
+  (id_farm, latencia_pool, latencia_dns, latencia_gateway, timestamp_medicao)
+Se a tabela não existir ele continuará sem falhar.
+"""
+import json
+from datetime import datetime
+
+from configenvironment import s3, bucket_silver, bucket_gold, cursor, conexao
+
+PREFIXO_GOLD = "rede/"
+
+
+def listar_arquivos():
+    arquivos = []
 
     paginator = s3.get_paginator("list_objects_v2")
-    page_iterator = paginator.paginate(Bucket=bucket_silver, Prefix=prefixo_silver)
+    for pagina in paginator.paginate(Bucket=bucket_silver, Prefix="medicoes/"):
+        for objeto in pagina.get("Contents", []):
+            if objeto["Key"].endswith(".json"):
+                arquivos.append(objeto["Key"])
 
-    for page in page_iterator:
+    return arquivos
 
-        if 'Contents' in page:
 
-            for i in page['Contents']:
+def ja_existe_no_gold(chave):
+    try:
+        s3.head_object(Bucket=bucket_gold, Key=chave)
+        return True
+    except Exception:
+        return False
 
-                key = i["Key"]
-                nome_arquivo = key.rsplit("/", 1)[-1]
 
-                conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+def inserir_no_banco(registro):
+    momento = datetime.strptime(registro["timestamp_medicao"], "%Y-%m-%dT%H:%M:%SZ")
 
-                chave_destino = f"{idempresa}/{nome_sanitizado}/rede/{particao(dia)}/{nome_arquivo}"
+    cursor.execute(
+        "insert into medicao_rede (id_farm, latencia_pool, latencia_dns, latencia_gateway, timestamp_medicao) values (%s, %s, %s, %s, %s)",
+        (
+            registro["id_farm"],
+            registro["latencia_pool"],
+            registro["latencia_dns"],
+            registro["latencia_gateway"],
+            momento,
+        ),
+    )
+    conexao.commit()
 
-                content_type = "application/json" if nome_arquivo.endswith(".json") else "text/csv"
 
-                s3.put_object(
-                    Bucket=bucket_gold,
-                    Key=chave_destino,
-                    Body=conteudo,
-                    ContentType=content_type,
-                ) 
-    print("teste")
-    
+def main():
+    arquivos = listar_arquivos()
+    print(f"{len(arquivos)} arquivos de rede no silver")
+
+    for chave in arquivos:
+        chave_gold = PREFIXO_GOLD + chave
+
+        # se já está no gold, já foi pro banco também
+        if ja_existe_no_gold(chave_gold):
+            continue
+
+        try:
+            resposta = s3.get_object(Bucket=bucket_silver, Key=chave)
+            registro = json.loads(resposta["Body"].read().decode("utf-8"))
+
+            # o gerador manda "timestamp-medicao", o banco usa "timestamp_medicao"
+            if "timestamp-medicao" in registro:
+                registro["timestamp_medicao"] = registro.pop("timestamp-medicao")
+
+            s3.put_object(
+                Bucket=bucket_gold,
+                Key=chave_gold,
+                Body=json.dumps(registro).encode("utf-8"),
+                ContentType="application/json",
+            )
+
+            inserir_no_banco(registro)
+
+        except Exception as erro:
+            print(f"Erro em {chave}: {erro}")
