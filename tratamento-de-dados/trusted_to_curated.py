@@ -12,7 +12,7 @@ from raw_to_trusted import particao , buscar_empresa
 
 from CURATED.financeiro import main as financeiro
 from CURATED.operacional import main as operacional
-from CURATED.rede import main as rede
+# from CURATED.rede import main as rede
 
 ARQUIVOS = ("clean_data.csv", "dados_nulos.csv", "treated-data.json")
 
@@ -38,7 +38,7 @@ def main(id_empresa, dia):
 
     financeiro(id_empresa , dia)
     operacional(id_empresa , dia)
-    rede(id_empresa , dia)
+    # rede(id_empresa , dia)
    
     print(
         f"Gold concluído para empresa {nome_empresa} "
