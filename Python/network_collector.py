@@ -28,8 +28,8 @@ import mysql.connector
 # DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 # BUCKET_RAW = os.getenv("BUCKET_RAW") or os.getenv("AWS_BUCKET_RAW") or os.getenv("AWS_BUCKET_BRONZE")
-S3_ENDPOINT = os.getenv("S3_ENDPOINT")
-AWS_REGION = os.getenv("AWS_DEFAULT_REGION")
+# S3_ENDPOINT = os.getenv("S3_ENDPOINT")
+# AWS_REGION = os.getenv("AWS_DEFAULT_REGION")
 # optional: number of events to emit and exit (0 = run forever)
 NUM_EVENTS = int(os.getenv("NUM_EVENTS", "0"))
 # If BUCKET_RAW is not set we fallback to a local directory to allow running
