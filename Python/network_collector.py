@@ -14,19 +14,20 @@ import random
 import time
 import uuid
 from datetime import datetime, timezone
-# from configenv import s3, BUCKET_RAW, BUCKET_TRUSTED, BUCKET_CURATED, cursor
+from config import conexao,  cursor
+from s3config import bucket_bronze as BUCKET_RAW , s3
 
 import boto3  
 import mysql.connector 
 
 # PASSO 1 - Configurações 
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT", "3306")
-DB_NAME = os.getenv("DB_NAME")  
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
+# DB_HOST = os.getenv("DB_HOST")
+# DB_PORT = os.getenv("DB_PORT", "3306")
+# DB_NAME = os.getenv("DB_NAME")  
+# DB_USER = os.getenv("DB_USER")
+# DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-BUCKET_RAW = os.getenv("BUCKET_RAW") or os.getenv("AWS_BUCKET_RAW") or os.getenv("AWS_BUCKET_BRONZE")
+# BUCKET_RAW = os.getenv("BUCKET_RAW") or os.getenv("AWS_BUCKET_RAW") or os.getenv("AWS_BUCKET_BRONZE")
 S3_ENDPOINT = os.getenv("S3_ENDPOINT")
 AWS_REGION = os.getenv("AWS_DEFAULT_REGION")
 # optional: number of events to emit and exit (0 = run forever)
@@ -43,17 +44,9 @@ CAMPOS_LATENCIA = ["latencia_pool", "latencia_dns", "latencia_gateway"]
 
 # PASSO 2 - Buscar no banco
 def buscar_ids_farm():
-    conexao = mysql.connector.connect(
-        host=DB_HOST, port=DB_PORT, database=DB_NAME, user=DB_USER, password=DB_PASSWORD
-    )
-    try:
-        with conexao.cursor() as cursor:
-            cursor.execute("SELECT id FROM farm") 
-            linhas = cursor.fetchall()  # lista de tuplas: [(25,), (26,)]
-    finally:
-        conexao.close() 
-
-    return [linha[0] for linha in linhas]  
+    cursor.execute("SELECT id FROM farm")
+    linhas = cursor.fetchall()
+    return [linha[0] for linha in linhas]
 
 
 # PASSO 3 - Gerar um registro limpo (aleatório, menos id_farm)
@@ -121,17 +114,17 @@ def salvar_no_bucket(s3, registro, use_local=False, local_dir=LOCAL_BUCKET_DIR):
 def main():
     # validação das variáveis de ambiente mais comuns para falhas óbvias
     # BUCKET_RAW is optional: if missing we fallback to a local directory.
-    obrigatorios = {
-        "DB_HOST": DB_HOST,
-        "DB_USER": DB_USER,
-        "DB_NAME": DB_NAME,
-        "DB_PASSWORD": DB_PASSWORD,
-    }
-    faltando = [k for k, v in obrigatorios.items() if not v]
-    if faltando:
-        raise RuntimeError(
-            "Variáveis de ambiente faltando ou vazias: " + ", ".join(faltando)
-        )
+    # obrigatorios = {
+    #     "DB_HOST": DB_HOST,
+    #     "DB_USER": DB_USER,
+    #     "DB_NAME": DB_NAME,
+    #     "DB_PASSWORD": DB_PASSWORD,
+    # }
+    # faltando = [k for k, v in obrigatorios.items() if not v]
+    # if faltando:
+    #     raise RuntimeError(
+    #         "Variáveis de ambiente faltando ou vazias: " + ", ".join(faltando)
+    #     )
     ids_farm = buscar_ids_farm()
 
     use_local = not BUCKET_RAW
@@ -140,14 +133,14 @@ def main():
     print(f"{len(ids_farm)} farms carregadas. Gravando em {origem_descr}...")
 
     # create s3 client using region_name when provided; ignore custom endpoint unless explicitly set
-    if use_local:
-        s3 = None
-    else:
-        region = AWS_REGION or None
-        if S3_ENDPOINT:
-            s3 = boto3.client("s3", endpoint_url=S3_ENDPOINT, region_name=region)
-        else:
-            s3 = boto3.client("s3", region_name=region)
+    # if use_local:
+    #     s3 = None
+    # else:
+    #     region = AWS_REGION or None
+    #     if S3_ENDPOINT:
+    #         s3 = boto3.client("s3", endpoint_url=S3_ENDPOINT, region_name=region)
+    #     else:
+    #         s3 = boto3.client("s3", region_name=region)
 
     try:
         count = 0
