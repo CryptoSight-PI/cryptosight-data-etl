@@ -159,7 +159,11 @@ def main_rede():
     
 
 def main():
-    main_metricas()
+    try:
+        main_metricas()
+    except Exception as erro:
+        print(f"Erro nas métricas: {erro}")
+
     main_rede()
 
 if __name__ == "__main__":
