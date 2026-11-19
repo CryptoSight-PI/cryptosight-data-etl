@@ -285,6 +285,7 @@ def gerar_status_geral(dados, limites, agora):
         componentes = []
         maior_z = 0
         maior_comp = None
+        maior_valor = None
 
         for i in limites:
 
@@ -305,6 +306,7 @@ def gerar_status_geral(dados, limites, agora):
                     if abs(z) > abs(maior_z):
                         maior_z = z
                         maior_comp = i["componente"].lower()
+                        maior_valor = float(valor)
 
                 if offline:
                     status = "offline"
@@ -331,7 +333,8 @@ def gerar_status_geral(dados, limites, agora):
                     else "normal"),
             "leitura_mais_fora_media" : {
                 "componente" : maior_comp,
-                "z_score" : round(float(maior_z) , 2)
+                "z_score" : round(float(maior_z) , 2),
+                "valor" : maior_valor
             },
             "componentes": componentes
         })
