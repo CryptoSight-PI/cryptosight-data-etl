@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
+from urllib.parse import unquote_plus
 from configenvironment import s3, bucket_bronze, bucket_silver , cursor
 import io
 import numpy as np
@@ -308,3 +310,127 @@ def main(id_empresa, arquivos_empresa, dia):
         f"{len(nulos)} descartadas."
     )
 
+    return [
+        f"{prefixo}/clean_data_{iddoarquivo}.csv",
+        f"{prefixo}/dados_nulos_{iddoarquivo}.csv",
+        f"{prefixo}/treated-data_{iddoarquivo}.json",
+    ]
+
+
+def agrupar_por_empresa(arquivos):
+    arquivos_por_empresa = {}
+    arquivos_sem_id = []
+
+    for chave in arquivos:
+        nome = chave.rsplit("/", 1)[-1]
+        resultado = re.match(r"^(\d+)[-_]", nome)
+
+        if resultado:
+            id_empresa = int(resultado.group(1))
+            arquivos_por_empresa.setdefault(id_empresa, []).append(chave)
+        else:
+            arquivos_sem_id.append(nome)
+
+    if arquivos_sem_id:
+        raise ValueError(
+            "Não foi possível identificar o ID da empresa nestes CSVs: "
+            + ", ".join(arquivos_sem_id)
+        )
+
+    if not arquivos_por_empresa:
+        raise ValueError("Nenhum ID de empresa foi encontrado nos CSVs.")
+
+    return arquivos_por_empresa
+
+
+def arquivar_arquivo(chave):
+
+    s3.copy_object(
+        Bucket=bucket_bronze,
+        CopySource={
+            "Bucket": bucket_bronze,
+            "Key": chave,
+        },
+        Key=f"processados/{chave}",
+    )
+
+    s3.delete_object(
+        Bucket=bucket_bronze,
+        Key=chave,
+    )
+
+
+def chaves_do_evento(event):
+    return [
+        unquote_plus(r["s3"]["object"]["key"])
+        for r in event.get("Records", [])
+    ]
+
+
+def lambda_handler(event, context=None):
+    silver_keys = []
+    erros = []
+
+    arquivos = []
+    for chave in chaves_do_evento(event):
+        nome = chave.rsplit("/", 1)[-1]
+
+        if not chave.startswith("metrics/"):
+            continue
+
+        if not nome.lower().endswith(".csv"):
+            continue
+
+        if "_processos_" in nome.lower():
+            continue
+
+        arquivos.append(chave)
+
+    if not arquivos:
+        print("Nenhum arquivo pendente encontrado.")
+        return {"silver_keys": silver_keys, "erros": erros}
+
+    arquivos_por_data = {}
+
+    for chave in arquivos:
+        partes = chave.split("/")
+
+        # metrics/AAAA/MM/DD/arquivo.csv
+        if len(partes) < 5:
+            print(f"Caminho ignorado por formato inválido: {chave}")
+            continue
+
+        try:
+            dia = date(int(partes[1]), int(partes[2]), int(partes[3])
+            )
+        except ValueError:
+            print(f"Data inválida no caminho: {chave}")
+            continue
+
+        arquivos_por_data.setdefault(dia, []).append(chave)
+
+    for dia, arquivos_dia in sorted(arquivos_por_data.items()):
+        try:
+            arquivos_por_empresa = agrupar_por_empresa(arquivos_dia)
+        except ValueError as erro:
+            print(f"Dia {dia} ignorado: {erro}")
+            continue
+
+        for id_empresa, arquivos_empresa in sorted(
+            arquivos_por_empresa.items()
+        ):
+            try:
+                silver_keys += main(id_empresa, arquivos_empresa, dia)
+
+                for chave in arquivos_empresa:
+                    arquivar_arquivo(chave)
+
+            except Exception as erro:
+                print(
+                    f"Erro na empresa {id_empresa}, "
+                    f"data {dia}: {erro}"
+                )
+                erros.append(f"{id_empresa}/{dia}: {erro}")
+                continue
+
+    return {"silver_keys": silver_keys, "erros": erros}

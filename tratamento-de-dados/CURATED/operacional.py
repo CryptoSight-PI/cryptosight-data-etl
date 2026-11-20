@@ -1,10 +1,14 @@
 from configenvironment import s3 , bucket_silver , bucket_gold , cursor
-from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
+# from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
 # from raw_to_trusted import buscar_empresa, particao, NUMERICAS
 import pandas as pd
 import io
 import json
+import re
+from datetime import date
 from sklearn.linear_model import LinearRegression
+from urllib.parse import unquote_plus
+
 
 FUSO_LOCAL = "America/Sao_Paulo"
 
@@ -109,7 +113,6 @@ def buscar_maquinas_sessao(idsessao):
 
     # print(maquinas)
     return maquinas
-
 
 
 
@@ -936,4 +939,88 @@ def main(idempresa, dia):
                     
     print("teste")
 
-    
+
+PADRAO_CHAVE = re.compile(r"^(\d+)/(\d{4})/(\d{2})/(\d{2})/clean_data_[^/]+\.csv$")
+
+
+def chave_controle(idempresa):
+    return f"{idempresa}/_controle/operacional_lidos.json"
+
+
+def ler_controle(idempresa):
+    try:
+        resposta = s3.get_object(Bucket=bucket_gold, Key=chave_controle(idempresa))
+    except s3.exceptions.NoSuchKey:
+        return set()
+    return set(json.loads(resposta["Body"].read().decode("utf-8")))
+
+
+def salvar_controle(idempresa, lidos):
+    s3.put_object(
+        Bucket=bucket_gold,
+        Key=chave_controle(idempresa),
+        Body=json.dumps(sorted(lidos)).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def listar_clean_data(idempresa):
+    encontrados = {}
+    paginator = s3.get_paginator("list_objects_v2")
+    for pagina in paginator.paginate(Bucket=bucket_silver, Prefix=f"{idempresa}/"):
+        for objeto in pagina.get("Contents", []):
+            m = PADRAO_CHAVE.match(objeto["Key"])
+            if m:
+                _, a, me, d = m.groups()
+                encontrados[objeto["Key"]] = date(int(a), int(me), int(d))
+    return encontrados
+
+
+def processar_empresa(idempresa):
+    lidos = ler_controle(idempresa)
+    pendentes = {
+        chave: dia
+        for chave, dia in listar_clean_data(idempresa).items()
+        if chave not in lidos
+    }
+
+    if not pendentes:
+        print(f"Empresa {idempresa}: nenhum arquivo novo no silver.")
+        return [], []
+
+    por_dia = {}
+    for chave, dia in pendentes.items():
+        por_dia.setdefault(dia, []).append(chave)
+
+    processados, erros = [], []
+
+    for dia, chaves in sorted(por_dia.items()):
+        try:
+            main(idempresa, dia)
+        except Exception as erro:
+            print(f"Erro operacional empresa {idempresa}, dia {dia}: {erro}")
+            erros.append(f"{idempresa}/{dia}: {erro}")
+            continue  
+
+        lidos.update(chaves)
+        salvar_controle(idempresa, lidos)
+        processados += chaves
+
+    return processados, erros
+
+
+def lambda_handler(event, context=None):
+    empresas = set()
+    for r in event.get("Records", []):
+        chave = unquote_plus(r["s3"]["object"]["key"])
+        m = PADRAO_CHAVE.match(chave)
+        if m:
+            empresas.add(int(m.group(1)))
+
+    processados, erros = [], []
+    for idempresa in sorted(empresas):
+        p, e = processar_empresa(idempresa)
+        processados += p
+        erros += e
+
+    return {"processados": processados, "erros": erros}

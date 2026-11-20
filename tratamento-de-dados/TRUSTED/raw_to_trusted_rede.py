@@ -113,5 +113,10 @@ def main():
             print("falha gravando no silver:", chave, e)
 
 
+def lambda_handler(event=None, context=None):
+    main()
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     main()

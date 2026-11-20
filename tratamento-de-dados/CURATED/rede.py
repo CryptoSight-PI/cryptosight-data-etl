@@ -83,3 +83,12 @@ def main():
 
         except Exception as erro:
             print(f"Erro em {chave}: {erro}")
+
+
+def lambda_handler(event=None, context=None):
+    main()
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    main()
