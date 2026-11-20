@@ -7,12 +7,17 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+import os
+import subprocess
 
 from raw_to_trusted import main as raw_to_trusted
 from trusted_to_curated import main as trusted_to_curated
 from configenvironment import s3 , bucket_silver , bucket_gold , bucket_bronze , cursor
 from raw_to_trusted import particao
+from raw_to_trusted_rede import main as rede_raw_to_trusted
+from CURATED import rede as rede_curated
+
+DEFAULT_EVENTS = 5
 
 
 
@@ -92,7 +97,7 @@ def arquivar_arquivo(chave):
 
 
 # agrupamento por data ou seja nao é do dia
-def main():
+def main_metricas():
     arquivos = listar_arquivos_raw()
 
     if not arquivos:
@@ -120,7 +125,11 @@ def main():
         arquivos_por_data.setdefault(dia, []).append(chave)
 
     for dia, arquivos_dia in sorted(arquivos_por_data.items()):
-        arquivos_por_empresa = agrupar_por_empresa(arquivos_dia)
+        try:
+            arquivos_por_empresa = agrupar_por_empresa(arquivos_dia)
+        except ValueError as erro:
+            print(f"Dia {dia} ignorado: {erro}")
+            continue    
 
         for id_empresa, arquivos_empresa in sorted(
             arquivos_por_empresa.items()
@@ -143,6 +152,19 @@ def main():
                 continue
 
     print("Pipeline finalizado.")
+
+def main_rede():
+    rede_raw_to_trusted()
+    rede_curated.main()
+    
+
+def main():
+    try:
+        main_metricas()
+    except Exception as erro:
+        print(f"Erro nas métricas: {erro}")
+
+    main_rede()
 
 if __name__ == "__main__":
     main()
