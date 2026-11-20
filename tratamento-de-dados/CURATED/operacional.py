@@ -1,6 +1,6 @@
 from configenvironment import s3 , bucket_silver , bucket_gold , cursor
 from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
-from raw_to_trusted import buscar_empresa, particao, NUMERICAS
+# from raw_to_trusted import buscar_empresa, particao, NUMERICAS
 import pandas as pd
 import io
 import json
@@ -25,6 +25,92 @@ MAPA_COMPONENTES = {
 MINUTOS_OFFLINE = 10
 
 MARGEM_ATENCAO = 0.10
+
+
+NUMERICAS = [
+    "cpu_percent", "cpu_frequency", "ram_percent",
+    "swap_memory_total", "swap_memory_used", "swap_memory_percent",
+    "upload_speed", "download_speed", "temperature", "fans_speed", "disk",
+    "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed",
+]
+
+
+def particao(dia):
+    """date -> '2026/10/21'"""
+    return f"{dia:%Y/%m/%d}"
+
+
+def buscar_empresa(id_empresa):
+    cursor.execute(
+        """
+        SELECT id, razao_social, nome_fantasia
+        FROM empresa
+        WHERE id = %s
+        """,
+        (id_empresa,),
+    )
+
+    empresa = cursor.fetchone()
+
+    if empresa is None:
+        raise ValueError(
+            f"Nenhuma empresa encontrada com ID {id_empresa}"
+        )
+
+    nome_empresa = empresa[2] or empresa[1]
+
+    if not nome_empresa:
+        raise ValueError(
+            f"A empresa {id_empresa} não tem nome cadastrado"
+        )
+
+    return nome_empresa
+
+
+def sanitizar_nome(nome_empresa):
+    nome = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip(" .")
+
+    if not nome:
+        raise ValueError("Nome inválido para a empresa.")
+
+    return nome 
+
+def buscar_farm(idempresa):
+    cursor.execute("select id from farm where id_empresa = %s" , (idempresa ,) , )
+
+    farms = []
+
+    for i in cursor.fetchall():
+        farms.append(i[0])
+
+    # print(farms)
+
+    return farms
+
+def buscar_sessoes(idfarm):
+    cursor.execute("select id from sessao where id_farm = %s" , (idfarm ,) ,)
+
+    sessoes = []
+
+    for i in cursor.fetchall():
+        sessoes.append(i[0])
+
+    # print(sessoes)
+    return sessoes
+
+
+def buscar_maquinas_sessao(idsessao):
+    cursor.execute("select id, mac_address from maquina where id_sessao = %s" , (idsessao ,) , )
+
+    maquinas = []
+
+    for i in cursor.fetchall():
+        maquinas.append({"id_maquina" : i[0] , "mac_address" : str(i[1]).strip().lower().replace("-", ":")})
+
+    # print(maquinas)
+    return maquinas
+
+
 
 
 #deixa o timestamp para o fuso local e chega ate segundos (tira o milisegundos)
