@@ -1,10 +1,14 @@
-from configenvironment import s3 , bucket_silver , bucket_gold , cursor
-from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
-from raw_to_trusted import buscar_empresa, particao, NUMERICAS
+from configenvironment import s3 , bucket_silver , bucket_gold , cursor, garantir_conexao
+# from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
+# from raw_to_trusted import buscar_empresa, particao, NUMERICAS
 import pandas as pd
 import io
 import json
+import re
+from datetime import date
 from sklearn.linear_model import LinearRegression
+from urllib.parse import unquote_plus
+
 
 FUSO_LOCAL = "America/Sao_Paulo"
 
@@ -25,6 +29,91 @@ MAPA_COMPONENTES = {
 MINUTOS_OFFLINE = 10
 
 MARGEM_ATENCAO = 0.10
+
+
+NUMERICAS = [
+    "cpu_percent", "cpu_frequency", "ram_percent",
+    "swap_memory_total", "swap_memory_used", "swap_memory_percent",
+    "upload_speed", "download_speed", "temperature", "fans_speed", "disk",
+    "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed",
+]
+
+
+def particao(dia):
+    """date -> '2026/10/21'"""
+    return f"{dia:%Y/%m/%d}"
+
+
+def buscar_empresa(id_empresa):
+    cursor.execute(
+        """
+        SELECT id, razao_social, nome_fantasia
+        FROM empresa
+        WHERE id = %s
+        """,
+        (id_empresa,),
+    )
+
+    empresa = cursor.fetchone()
+
+    if empresa is None:
+        raise ValueError(
+            f"Nenhuma empresa encontrada com ID {id_empresa}"
+        )
+
+    nome_empresa = empresa[2] or empresa[1]
+
+    if not nome_empresa:
+        raise ValueError(
+            f"A empresa {id_empresa} não tem nome cadastrado"
+        )
+
+    return nome_empresa
+
+
+def sanitizar_nome(nome_empresa):
+    nome = re.sub(r'[<>:"/\\|?*]', "_", nome_empresa).strip(" .")
+
+    if not nome:
+        raise ValueError("Nome inválido para a empresa.")
+
+    return nome 
+
+def buscar_farm(idempresa):
+    cursor.execute("select id from farm where id_empresa = %s" , (idempresa ,) , )
+
+    farms = []
+
+    for i in cursor.fetchall():
+        farms.append(i[0])
+
+    # print(farms)
+
+    return farms
+
+def buscar_sessoes(idfarm):
+    cursor.execute("select id from sessao where id_farm = %s" , (idfarm ,) ,)
+
+    sessoes = []
+
+    for i in cursor.fetchall():
+        sessoes.append(i[0])
+
+    # print(sessoes)
+    return sessoes
+
+
+def buscar_maquinas_sessao(idsessao):
+    cursor.execute("select id, mac_address from maquina where id_sessao = %s" , (idsessao ,) , )
+
+    maquinas = []
+
+    for i in cursor.fetchall():
+        maquinas.append({"id_maquina" : i[0] , "mac_address" : str(i[1]).strip().lower().replace("-", ":")})
+
+    # print(maquinas)
+    return maquinas
+
 
 
 #deixa o timestamp para o fuso local e chega ate segundos (tira o milisegundos)
@@ -194,7 +283,8 @@ def ler_trusted(prefixo, maquinas):
             key = i["Key"]
             nome_arquivo = key.rsplit("/", 1)[-1]
 
-            if not (nome_arquivo.endswith(".csv")):
+            # só dados limpos; dados_nulos_*.csv (descartados) não entram nas métricas
+            if not (nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv")):
                 continue
 
             conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
@@ -285,6 +375,7 @@ def gerar_status_geral(dados, limites, agora):
         componentes = []
         maior_z = 0
         maior_comp = None
+        maior_valor = None
 
         for i in limites:
 
@@ -305,6 +396,7 @@ def gerar_status_geral(dados, limites, agora):
                     if abs(z) > abs(maior_z):
                         maior_z = z
                         maior_comp = i["componente"].lower()
+                        maior_valor = float(valor)
 
                 if offline:
                     status = "offline"
@@ -331,7 +423,8 @@ def gerar_status_geral(dados, limites, agora):
                     else "normal"),
             "leitura_mais_fora_media" : {
                 "componente" : maior_comp,
-                "z_score" : round(float(maior_z) , 2)
+                "z_score" : round(float(maior_z) , 2),
+                "valor" : maior_valor
             },
             "componentes": componentes
         })
@@ -850,4 +943,61 @@ def main(idempresa, dia):
                     
     print("teste")
 
-    
+def lambda_handler(event, context=None):
+    garantir_conexao()
+     # o event vem assim, se vier de um gatilho do s3:
+        # {"Records": [{"s3": {"bucket": {"name": "..."},
+        #                  "object": {"key": "metrics/2026/11/22/2-2026-11-22_10-00-00-aa-bb.csv"}}}]}
+
+    # se nao tiver gatilho, entra em eventbridge (agendamento) e retorna assim {
+#   "version": "0",
+#   "id": "a1b2c3...",
+#   "detail-type": "Scheduled Event",
+#   "source": "aws.events",
+#   "account": "123456789012",
+#   "time": "2026-11-22T13:05:00Z",
+#   "region": "us-east-1",
+#   "resources": ["arn:aws:events:...:rule/gold-5min"],
+#   "detail": {}
+# }
+    hoje = pd.Timestamp.now(tz=FUSO_LOCAL).date()
+
+    alvos = set()
+
+    if "Records" in event:
+
+        for r in event["Records"]:
+            partes = unquote_plus(r["s3"]["object"]["key"]).split("/")
+
+            if not partes[-1].startswith("clean_data"):
+                continue
+
+            try:
+                alvos.add((int(partes[0]), date(int(partes[1]), int(partes[2]), int(partes[3]))))
+            except ValueError:
+                print(f"Chave ignorada (fora do padrão): {r['s3']['object']['key']}")
+    else:
+        paginator = s3.get_paginator("list_objects_v2")
+        for pagina in paginator.paginate(Bucket=bucket_silver, Delimiter="/"):
+            for pasta in pagina.get("CommonPrefixes", []):
+                nome = pasta["Prefix"].strip("/")
+                #esse nome é o idempresa
+                if nome.isdigit():
+                    #so se for numero
+                    alvos.add((int(nome), hoje))
+
+    #no fim nos dois casos, alvos ficou com idempreasa e data
+
+    erros = []
+
+    for idempresa, dia in sorted(alvos):
+        try:
+            main(idempresa, dia)
+        except Exception as erro:
+            print(f"Erro na empresa {idempresa}, dia {dia}: {erro}")
+            erros.append(f"{idempresa}/{dia}: {erro}")
+
+    if erros and "Records" in event:
+        raise RuntimeError("; ".join(erros))
+
+    return {"statusCode": 200, "erros": erros}

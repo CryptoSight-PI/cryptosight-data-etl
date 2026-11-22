@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
-from configenvironment import s3, bucket_bronze, bucket_silver , cursor
+import re
+from datetime import date, datetime, timezone
+from urllib.parse import unquote_plus
+from configenvironment import s3, bucket_bronze, bucket_silver , cursor, garantir_conexao
 import io
 import numpy as np
 
@@ -258,7 +260,7 @@ def main(id_empresa, arquivos_empresa, dia):
         raise ValueError(
             f"Nenhum CSV encontrado para a empresa {id_empresa}."
         )
-    iddoarquivo = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    iddoarquivo = arquivos_empresa[0].rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
     dataframes = [
         ler_csv_s3(chave)
@@ -308,3 +310,62 @@ def main(id_empresa, arquivos_empresa, dia):
         f"{len(nulos)} descartadas."
     )
 
+    return [
+        f"{prefixo}/clean_data_{iddoarquivo}.csv",
+        f"{prefixo}/dados_nulos_{iddoarquivo}.csv",
+        f"{prefixo}/treated-data_{iddoarquivo}.json",
+    ]
+
+
+def arquivar_arquivo(chave):
+    s3.copy_object(
+        Bucket=bucket_bronze,
+        CopySource={"Bucket": bucket_bronze, "Key": chave},
+        Key=f"processados/{chave}",
+    )
+    s3.delete_object(Bucket=bucket_bronze, Key=chave)
+
+
+def lambda_handler(event, context=None):
+    garantir_conexao()
+    silver_keys = []
+    # o event vem assim:
+    # {"Records": [{"s3": {"bucket": {"name": "..."},
+    #                  "object": {"key": "metrics/2026/11/22/2-2026-11-22_10-00-00-aa-bb.csv"}}}]}
+
+    erros = []
+    for registro in event["Records"]:
+        chave = unquote_plus(registro["s3"]["object"]["key"])
+        # esse daqui é  o caminho do csv
+        nome = chave.rsplit("/", 1)[-1]
+        #aqui é so o nome do arquivo csv
+
+        if not nome.lower().endswith(".csv") or "_processos_" in nome.lower():
+            continue
+        try:
+            try:
+                s3.head_object(Bucket=bucket_bronze, Key=chave)
+            except Exception:
+                continue
+            partes = chave.split("/") 
+            #dividiu o caminho, separando por /         
+            dia = date(int(partes[1]), int(partes[2]), int(partes[3]))
+            # (ano , mes , dia)
+            idempresa = int(re.match(r"^(\d+)[-_]", nome).group(1))
+            #pega o primeiro digito, que seria o id da empresa
+
+            silver_keys += main(idempresa, [chave], dia)
+
+            arquivar_arquivo(chave)
+
+        except Exception as erro:
+            print(f"Erro no arquivo {chave}: {erro}")
+            erros.append(chave)
+
+
+    if erros:
+        raise RuntimeError(f"Falhou: {erros}")
+        # main(idempresa, [chave], dia)
+
+
+    return {"statusCode": 200, "silver_keys": silver_keys}
