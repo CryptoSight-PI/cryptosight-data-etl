@@ -28,3 +28,7 @@ cnx = {
 
 conexao = mysql.connector.connect(**cnx)
 cursor = conexao.cursor()
+
+
+def garantir_conexao():
+    conexao.ping(reconnect=True, attempts=3, delay=1)

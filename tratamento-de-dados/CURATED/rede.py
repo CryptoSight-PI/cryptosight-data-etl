@@ -12,7 +12,7 @@ Se a tabela não existir ele continuará sem falhar.
 import json
 from datetime import datetime
 
-from configenvironment import s3, bucket_silver, bucket_gold, cursor, conexao
+from configenvironment import s3, bucket_silver, bucket_gold, cursor, conexao, garantir_conexao
 
 PREFIXO_GOLD = "rede/"
 
@@ -86,6 +86,7 @@ def main():
 
 
 def lambda_handler(event=None, context=None):
+    garantir_conexao()
     main()
     return {"status": "ok"}
 

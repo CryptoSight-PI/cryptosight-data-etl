@@ -33,12 +33,11 @@ def main_metricas():
         print("Métricas: nada pendente no bronze.")
         return
 
-    resultado = raw_to_trusted.lambda_handler(evento_s3(chaves))
-    print("[trusted métricas]", resultado)
+    print("[trusted métricas]", raw_to_trusted.lambda_handler(evento_s3(chaves)))
 
-    silver = resultado["silver_keys"]
-    rodar_curated(operacional.lambda_handler, "curated operacional", silver)
-    rodar_curated(getattr(financeiro, "lambda_handler", None), "curated financeiro", silver)
+    print("[curated operacional]", operacional.lambda_handler({}))
+    if hasattr(financeiro, "lambda_handler"):
+        print("[curated financeiro]", financeiro.lambda_handler({}))
 
 
 def main_rede():

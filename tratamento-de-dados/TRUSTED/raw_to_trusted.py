@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime, timezone
 from urllib.parse import unquote_plus
-from configenvironment import s3, bucket_bronze, bucket_silver , cursor
+from configenvironment import s3, bucket_bronze, bucket_silver , cursor, garantir_conexao
 import io
 import numpy as np
 
@@ -260,7 +260,7 @@ def main(id_empresa, arquivos_empresa, dia):
         raise ValueError(
             f"Nenhum CSV encontrado para a empresa {id_empresa}."
         )
-    iddoarquivo = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    iddoarquivo = arquivos_empresa[0].rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
     dataframes = [
         ler_csv_s3(chave)
@@ -317,120 +317,55 @@ def main(id_empresa, arquivos_empresa, dia):
     ]
 
 
-def agrupar_por_empresa(arquivos):
-    arquivos_por_empresa = {}
-    arquivos_sem_id = []
-
-    for chave in arquivos:
-        nome = chave.rsplit("/", 1)[-1]
-        resultado = re.match(r"^(\d+)[-_]", nome)
-
-        if resultado:
-            id_empresa = int(resultado.group(1))
-            arquivos_por_empresa.setdefault(id_empresa, []).append(chave)
-        else:
-            arquivos_sem_id.append(nome)
-
-    if arquivos_sem_id:
-        raise ValueError(
-            "Não foi possível identificar o ID da empresa nestes CSVs: "
-            + ", ".join(arquivos_sem_id)
-        )
-
-    if not arquivos_por_empresa:
-        raise ValueError("Nenhum ID de empresa foi encontrado nos CSVs.")
-
-    return arquivos_por_empresa
-
-
 def arquivar_arquivo(chave):
-
     s3.copy_object(
         Bucket=bucket_bronze,
-        CopySource={
-            "Bucket": bucket_bronze,
-            "Key": chave,
-        },
+        CopySource={"Bucket": bucket_bronze, "Key": chave},
         Key=f"processados/{chave}",
     )
-
-    s3.delete_object(
-        Bucket=bucket_bronze,
-        Key=chave,
-    )
-
-
-def chaves_do_evento(event):
-    return [
-        unquote_plus(r["s3"]["object"]["key"])
-        for r in event.get("Records", [])
-    ]
+    s3.delete_object(Bucket=bucket_bronze, Key=chave)
 
 
 def lambda_handler(event, context=None):
+    garantir_conexao()
     silver_keys = []
+    # o event vem assim:
+    # {"Records": [{"s3": {"bucket": {"name": "..."},
+    #                  "object": {"key": "metrics/2026/11/22/2-2026-11-22_10-00-00-aa-bb.csv"}}}]}
+
     erros = []
-
-    arquivos = []
-    for chave in chaves_do_evento(event):
+    for registro in event["Records"]:
+        chave = unquote_plus(registro["s3"]["object"]["key"])
+        # esse daqui é  o caminho do csv
         nome = chave.rsplit("/", 1)[-1]
+        #aqui é so o nome do arquivo csv
 
-        if not chave.startswith("metrics/"):
+        if not nome.lower().endswith(".csv") or "_processos_" in nome.lower():
             continue
-
-        if not nome.lower().endswith(".csv"):
-            continue
-
-        if "_processos_" in nome.lower():
-            continue
-
-        arquivos.append(chave)
-
-    if not arquivos:
-        print("Nenhum arquivo pendente encontrado.")
-        return {"silver_keys": silver_keys, "erros": erros}
-
-    arquivos_por_data = {}
-
-    for chave in arquivos:
-        partes = chave.split("/")
-
-        # metrics/AAAA/MM/DD/arquivo.csv
-        if len(partes) < 5:
-            print(f"Caminho ignorado por formato inválido: {chave}")
-            continue
-
         try:
-            dia = date(int(partes[1]), int(partes[2]), int(partes[3])
-            )
-        except ValueError:
-            print(f"Data inválida no caminho: {chave}")
-            continue
-
-        arquivos_por_data.setdefault(dia, []).append(chave)
-
-    for dia, arquivos_dia in sorted(arquivos_por_data.items()):
-        try:
-            arquivos_por_empresa = agrupar_por_empresa(arquivos_dia)
-        except ValueError as erro:
-            print(f"Dia {dia} ignorado: {erro}")
-            continue
-
-        for id_empresa, arquivos_empresa in sorted(
-            arquivos_por_empresa.items()
-        ):
             try:
-                silver_keys += main(id_empresa, arquivos_empresa, dia)
-
-                for chave in arquivos_empresa:
-                    arquivar_arquivo(chave)
-
-            except Exception as erro:
-                print(
-                    f"Erro na empresa {id_empresa}, "
-                    f"data {dia}: {erro}"
-                )
-                erros.append(f"{id_empresa}/{dia}: {erro}")
+                s3.head_object(Bucket=bucket_bronze, Key=chave)
+            except Exception:
                 continue
+            partes = chave.split("/") 
+            #dividiu o caminho, separando por /         
+            dia = date(int(partes[1]), int(partes[2]), int(partes[3]))
+            # (ano , mes , dia)
+            idempresa = int(re.match(r"^(\d+)[-_]", nome).group(1))
+            #pega o primeiro digito, que seria o id da empresa
 
-    return {"silver_keys": silver_keys, "erros": erros}
+            silver_keys += main(idempresa, [chave], dia)
+
+            arquivar_arquivo(chave)
+
+        except Exception as erro:
+            print(f"Erro no arquivo {chave}: {erro}")
+            erros.append(chave)
+
+
+    if erros:
+        raise RuntimeError(f"Falhou: {erros}")
+        # main(idempresa, [chave], dia)
+
+
+    return {"statusCode": 200, "silver_keys": silver_keys}

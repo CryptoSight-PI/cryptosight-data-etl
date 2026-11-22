@@ -1,4 +1,4 @@
-from configenvironment import s3 , bucket_silver , bucket_gold , cursor
+from configenvironment import s3 , bucket_silver , bucket_gold , cursor, garantir_conexao
 # from CURATED.utils import sanitizar_nome, buscar_farm , buscar_sessoes , buscar_maquinas_sessao
 # from raw_to_trusted import buscar_empresa, particao, NUMERICAS
 import pandas as pd
@@ -283,7 +283,8 @@ def ler_trusted(prefixo, maquinas):
             key = i["Key"]
             nome_arquivo = key.rsplit("/", 1)[-1]
 
-            if not (nome_arquivo.endswith(".csv")):
+            # só dados limpos; dados_nulos_*.csv (descartados) não entram nas métricas
+            if not (nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv")):
                 continue
 
             conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
@@ -942,88 +943,61 @@ def main(idempresa, dia):
                     
     print("teste")
 
+def lambda_handler(event, context=None):
+    garantir_conexao()
+     # o event vem assim, se vier de um gatilho do s3:
+        # {"Records": [{"s3": {"bucket": {"name": "..."},
+        #                  "object": {"key": "metrics/2026/11/22/2-2026-11-22_10-00-00-aa-bb.csv"}}}]}
 
-PADRAO_CHAVE = re.compile(r"^(\d+)/(\d{4})/(\d{2})/(\d{2})/clean_data_[^/]+\.csv$")
+    # se nao tiver gatilho, entra em eventbridge (agendamento) e retorna assim {
+#   "version": "0",
+#   "id": "a1b2c3...",
+#   "detail-type": "Scheduled Event",
+#   "source": "aws.events",
+#   "account": "123456789012",
+#   "time": "2026-11-22T13:05:00Z",
+#   "region": "us-east-1",
+#   "resources": ["arn:aws:events:...:rule/gold-5min"],
+#   "detail": {}
+# }
+    hoje = pd.Timestamp.now(tz=FUSO_LOCAL).date()
 
+    alvos = set()
 
-def chave_controle(idempresa):
-    return f"{idempresa}/_controle/operacional_lidos.json"
+    if "Records" in event:
 
+        for r in event["Records"]:
+            partes = unquote_plus(r["s3"]["object"]["key"]).split("/")
 
-def ler_controle(idempresa):
-    try:
-        resposta = s3.get_object(Bucket=bucket_gold, Key=chave_controle(idempresa))
-    except s3.exceptions.NoSuchKey:
-        return set()
-    return set(json.loads(resposta["Body"].read().decode("utf-8")))
+            if not partes[-1].startswith("clean_data"):
+                continue
 
+            try:
+                alvos.add((int(partes[0]), date(int(partes[1]), int(partes[2]), int(partes[3]))))
+            except ValueError:
+                print(f"Chave ignorada (fora do padrão): {r['s3']['object']['key']}")
+    else:
+        paginator = s3.get_paginator("list_objects_v2")
+        for pagina in paginator.paginate(Bucket=bucket_silver, Delimiter="/"):
+            for pasta in pagina.get("CommonPrefixes", []):
+                nome = pasta["Prefix"].strip("/")
+                #esse nome é o idempresa
+                if nome.isdigit():
+                    #so se for numero
+                    alvos.add((int(nome), hoje))
 
-def salvar_controle(idempresa, lidos):
-    s3.put_object(
-        Bucket=bucket_gold,
-        Key=chave_controle(idempresa),
-        Body=json.dumps(sorted(lidos)).encode("utf-8"),
-        ContentType="application/json",
-    )
+    #no fim nos dois casos, alvos ficou com idempreasa e data
 
+    erros = []
 
-def listar_clean_data(idempresa):
-    encontrados = {}
-    paginator = s3.get_paginator("list_objects_v2")
-    for pagina in paginator.paginate(Bucket=bucket_silver, Prefix=f"{idempresa}/"):
-        for objeto in pagina.get("Contents", []):
-            m = PADRAO_CHAVE.match(objeto["Key"])
-            if m:
-                _, a, me, d = m.groups()
-                encontrados[objeto["Key"]] = date(int(a), int(me), int(d))
-    return encontrados
-
-
-def processar_empresa(idempresa):
-    lidos = ler_controle(idempresa)
-    pendentes = {
-        chave: dia
-        for chave, dia in listar_clean_data(idempresa).items()
-        if chave not in lidos
-    }
-
-    if not pendentes:
-        print(f"Empresa {idempresa}: nenhum arquivo novo no silver.")
-        return [], []
-
-    por_dia = {}
-    for chave, dia in pendentes.items():
-        por_dia.setdefault(dia, []).append(chave)
-
-    processados, erros = [], []
-
-    for dia, chaves in sorted(por_dia.items()):
+    for idempresa, dia in sorted(alvos):
         try:
             main(idempresa, dia)
         except Exception as erro:
-            print(f"Erro operacional empresa {idempresa}, dia {dia}: {erro}")
+            print(f"Erro na empresa {idempresa}, dia {dia}: {erro}")
             erros.append(f"{idempresa}/{dia}: {erro}")
-            continue  
 
-        lidos.update(chaves)
-        salvar_controle(idempresa, lidos)
-        processados += chaves
+    if erros and "Records" in event:
+        raise RuntimeError("; ".join(erros))
 
-    return processados, erros
-
-
-def lambda_handler(event, context=None):
-    empresas = set()
-    for r in event.get("Records", []):
-        chave = unquote_plus(r["s3"]["object"]["key"])
-        m = PADRAO_CHAVE.match(chave)
-        if m:
-            empresas.add(int(m.group(1)))
-
-    processados, erros = [], []
-    for idempresa in sorted(empresas):
-        p, e = processar_empresa(idempresa)
-        processados += p
-        erros += e
-
-    return {"processados": processados, "erros": erros}
+    return {"statusCode": 200, "erros": erros}

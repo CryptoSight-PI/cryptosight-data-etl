@@ -7,7 +7,7 @@ Usa as mesmas variáveis de ambiente do gerador + BUCKET_SILVER.
 import json
 import os
 
-from configenvironment import s3 , bucket_bronze , bucket_silver
+from configenvironment import s3 , bucket_bronze , bucket_silver, garantir_conexao
 
 # (adaptado) os buckets e o cliente S3 agora vêm da configenvironment do projeto,
 # ou seja: o MESMO bucket bronze/silver do resto da pipeline
@@ -114,6 +114,7 @@ def main():
 
 
 def lambda_handler(event=None, context=None):
+    garantir_conexao()
     main()
     return {"status": "ok"}
 
