@@ -30,6 +30,15 @@ MINUTOS_OFFLINE = 10
 
 MARGEM_ATENCAO = 0.10
 
+LIMITE_DANO = {
+    "temperatura": 95,
+    "cpu": 100,
+    "ram": 100,
+    "swap": 100,
+    "disco": 100,
+    "gpu": 100
+}
+
 
 NUMERICAS = [
     "cpu_percent", "cpu_frequency", "ram_percent",
@@ -37,6 +46,8 @@ NUMERICAS = [
     "upload_speed", "download_speed", "temperature", "fans_speed", "disk",
     "gpu_usage", "gpu_energy", "gpu_temp", "gpu_fan_speed",
 ]
+
+CACHE_CSV = {}
 
 
 def particao(dia):
@@ -287,8 +298,11 @@ def ler_trusted(prefixo, maquinas):
             if not (nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv")):
                 continue
 
-            conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
-            df = pd.read_csv(io.BytesIO(conteudo), sep=";")
+            if key not in CACHE_CSV:
+                conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+                CACHE_CSV[key] = pd.read_csv(io.BytesIO(conteudo), sep=";")
+
+            df = CACHE_CSV[key].copy()
 
             if df.empty:
                 continue
@@ -507,7 +521,7 @@ def gerar_previsoes(dados, limites, agora):
 
     for id_maquina in dados["_id_maquina"].unique():
 
-        maquina = dados[dados["_id_maquina"] == id_maquina]
+        maquina = dados[dados["_id_maquina"] == id_maquina].sort_values("timestamp")
         componentes = []
 
         for j in limites:
@@ -529,139 +543,222 @@ def gerar_previsoes(dados, limites, agora):
 
             ultima_leitura = maquina["timestamp"].max()
 
-            if (agora - ultima_leitura) > pd.Timedelta(hours=1):
+            if (agora - ultima_leitura) > pd.Timedelta(hours=2):
                 continue
 
-            serie = maquina.groupby("hora")[coluna].mean().dropna().tail(48)
+            lim_max = float(j["limite_max"]) if j["limite_max"] is not None else None
+            lim_min = float(j["limite_min"]) if j["limite_min"] is not None else None
 
-            
+            leituras = maquina[coluna].dropna()
+            serie = maquina.groupby("hora")[coluna].mean().dropna().tail(24)
 
             if serie.empty:
                 componentes.append({
                     "componente": componente,
+                    "estado_atual": None,
                     "valor_atual": None,
                     "valor_limite": None,
                     "direcao": "sem_dados",
                     "subida_por_hora": None,
                     "valores_previstos": {},
                     "horas_ate_limite": None,
+                    "horas_ate_atencao": None,
+                    "horas_ate_critico": None,
+                    "horario_critico": None,
                     "horario_estimado": None,
+                    "nivel_proximo_risco": None,
+                    "horas_em_critico": None,
+                    "critico_desde": None,
+                    "excesso": None,
+                    "excesso_pct": None,
                     "r2": None,
+                    "limite_dano": None,
+                    "tendencia_critica": None,
+                    "horas_ate_dano": None,
+                    "horario_dano": None,
+                    "horas_ate_normalizar": None,
+                    "margem_restante_pct": None,
                     "qualidade_tendencia": "baixa"
                 })
                 continue
 
-            valor_atual = float(serie.iloc[-1])
+            valor_atual = float(leituras.iloc[-1])
+            estado_atual = classificar(valor_atual, lim_min, lim_max)
 
-            if len(serie) < 6:
-                componentes.append({
-                    "componente": componente,
-                    "valor_atual": round(valor_atual, 2),
-                    "valor_limite": None,
-                    "direcao": "dados_insuficientes",
-                    "subida_por_hora": None,
-                    "valores_previstos": {},
-                    "horas_ate_limite": None,
-                    "horario_estimado": None,
-                    "r2": None,
-                    "qualidade_tendencia": "baixa"
-                })
-                continue
+            subida = 0.0
+            r2 = None
 
-            #cmc da regressao e da previsao por si so
-            x = (
-                (serie.index - serie.index[0]).total_seconds() / 3600
-            ).values.reshape(-1, 1)
+            if len(serie) >= 4:
+                x = (
+                    (serie.index - serie.index[0]).total_seconds() / 3600
+                ).values.reshape(-1, 1)
 
-            y = serie.values
+                y = serie.values
 
-            modelo = LinearRegression().fit(x, y)
+                modelo = LinearRegression().fit(x, y)
 
-            subida = float(modelo.coef_[0])
-            r2 = float(modelo.score(x, y))
+                subida = float(modelo.coef_[0])
+                r2 = float(modelo.score(x, y))
 
-            
-            limite_atencao_max = (float(j["limite_max"]) * (1 - MARGEM_ATENCAO) if j["limite_max"] is not None else None)
+            limite_atencao_max = (lim_max * (1 - MARGEM_ATENCAO) if lim_max is not None else None)
 
-            limite_atencao_min = (float(j["limite_min"]) * (1 + MARGEM_ATENCAO) if j["limite_min"] is not None else None)
-
-           
+            limite_atencao_min = (lim_min * (1 + MARGEM_ATENCAO) if lim_min is not None else None)
 
             horas_atencao = None
             horas_critico = None
 
-            if j["limite_max"] is not None and valor_atual >= float(j["limite_max"]):
-                horas_critico = 0
-            
-            elif j["limite_min"] is not None and valor_atual <= float(j["limite_min"]):
-                horas_critico = 0
-
-            if subida > 0 and j["limite_max"] is not None:
+            if subida > 0 and lim_max is not None:
 
                 if valor_atual < limite_atencao_max:
                     horas_atencao = (limite_atencao_max - valor_atual) / subida
-                    #subida é quanto aumenta por hora
-                    #ou seja pega quanto falta ate o limite e divide por quanto aumenta por hora
-                    #ex: limite= 90  valor = 70    subida: 5 por hora
-                    #90 - 70 = 20;   20 / 5 = 4;     falta 4 horas pra atingir o limite
                 else:
                     horas_atencao = 0
 
-                if valor_atual < float(j["limite_max"]):
-                    horas_critico = (float(j["limite_max"]) - valor_atual) / subida
+                if valor_atual < lim_max:
+                    horas_critico = (lim_max - valor_atual) / subida
                 else:
                     horas_critico = 0
 
-    
-            elif subida < 0 and j["limite_min"] is not None:
+            elif subida < 0 and lim_min is not None:
 
                 if valor_atual > limite_atencao_min:
                     horas_atencao = (limite_atencao_min - valor_atual) / subida
                 else:
                     horas_atencao = 0
 
-                if valor_atual > float(j["limite_min"]):
-                    horas_critico = (float(j["limite_min"]) - valor_atual) / subida
+                if valor_atual > lim_min:
+                    horas_critico = (lim_min - valor_atual) / subida
                 else:
                     horas_critico = 0
 
-            
-            if horas_atencao is not None and not 0 <= horas_atencao <= 72:
+            if horas_atencao is not None and not 0 <= horas_atencao <= 168:
                 horas_atencao = None
 
-            if horas_critico is not None and not 0 <= horas_critico <= 72:
+            if horas_critico is not None and not 0 <= horas_critico <= 168:
                 horas_critico = None
 
+            if estado_atual == "critico":
+                horas_critico = 0
+                horas_atencao = 0
+            elif estado_atual == "atencao":
+                horas_atencao = 0
 
-            #declara tudo no nivel de atencao
-            horas = horas_atencao
-            limite = limite_atencao_max if subida > 0 else limite_atencao_min
-            nivel = "atencao"
+            valor_limite = lim_max if subida >= 0 else lim_min
 
-            #se as condicoes do critico baterem =, vira critco
-            if horas_critico == 0 or (horas_critico is not None and(horas is None or horas_critico < horas)):
-                horas = horas_critico
-                limite = j["limite_max"] if subida > 0 else j["limite_min"]
+            horas_em_critico = None
+            critico_desde = None
+            excesso = None
+            excesso_pct = None
+
+            if estado_atual == "critico":
+                inicio = None
+
+                for hora in reversed(serie.index):
+                    v = serie.loc[hora]
+                    fora = (lim_max is not None and v > lim_max) or (lim_min is not None and v < lim_min)
+
+                    if not fora:
+                        break
+
+                    inicio = hora
+
+                if inicio is None:
+                    inicio = ultima_leitura
+
+                horas_em_critico = max(0.0, (ultima_leitura - inicio).total_seconds() / 3600)
+                critico_desde = formatar_timestamp(inicio)
+
+                if lim_max is not None and valor_atual > lim_max:
+                    valor_limite = lim_max
+                    excesso = valor_atual - lim_max
+                else:
+                    valor_limite = lim_min
+                    excesso = lim_min - valor_atual
+
+                if valor_limite:
+                    excesso_pct = round(excesso / valor_limite * 100, 1)
+
+            limite_dano = None
+            tendencia_critica = None
+            horas_ate_dano = None
+            horario_dano = None
+            horas_ate_normalizar = None
+            margem_restante_pct = None
+
+            if estado_atual == "critico":
+                if lim_max is not None and valor_atual > lim_max:
+                    sentido = 1
+                    limite_dano = LIMITE_DANO.get(componente)
+
+                    if limite_dano is None or limite_dano <= lim_max:
+                        limite_dano = lim_max * 1.15
+                else:
+                    sentido = -1
+                    limite_dano = lim_min * 0.3
+
+                margem = (limite_dano - valor_atual) / (limite_dano - valor_limite)
+                margem_restante_pct = round(max(0, min(1, margem)) * 100, 1)
+
+                recente = serie.tail(6)
+
+                if margem <= 0:
+                    tendencia_critica = "dano_atingido"
+                    horas_ate_dano = 0
+                elif len(recente) < 3:
+                    tendencia_critica = "sem_tendencia"
+                else:
+                    x = ((recente.index - recente.index[0]).total_seconds() / 3600).values.reshape(-1, 1)
+                    piora = float(LinearRegression().fit(x, recente.values).coef_[0]) * sentido
+
+                    if piora > abs(valor_limite) * 0.005:
+                        tendencia_critica = "agravando"
+                        horas_ate_dano = (limite_dano - valor_atual) * sentido / piora
+                    elif piora < -abs(valor_limite) * 0.005:
+                        tendencia_critica = "recuperando"
+                        horas_ate_normalizar = (valor_atual - valor_limite) * sentido / -piora
+                    else:
+                        tendencia_critica = "estavel"
+
+                if horas_ate_dano is not None and not 0 <= horas_ate_dano <= 168:
+                    horas_ate_dano = None
+
+                if horas_ate_normalizar is not None and not 0 <= horas_ate_normalizar <= 168:
+                    horas_ate_normalizar = None
+
+                if horas_ate_dano is not None:
+                    horario_dano = formatar_timestamp(ultima_leitura + pd.Timedelta(hours=horas_ate_dano))
+
+            if horas_critico is not None:
                 nivel = "critico"
+            elif horas_atencao is not None:
+                nivel = "atencao"
+            else:
+                nivel = None
 
-            if horas is None:
-                limite = None
-            elif limite is not None:
-                limite = float(limite)
-
-            if r2 >= 0.7:
+            if r2 is None:
+                qualidade_tendencia = "baixa"
+            elif r2 >= 0.7:
                 qualidade_tendencia = "boa"
             elif r2 >= 0.4:
                 qualidade_tendencia = "moderada"
             else:
                 qualidade_tendencia = "baixa"
 
+            if r2 is None:
+                direcao = "dados_insuficientes"
+            elif subida > 0:
+                direcao = "subindo"
+            elif subida < 0:
+                direcao = "descendo"
+            else:
+                direcao = "estavel"
 
             componentes.append({
                 "componente": componente,
+                "estado_atual": estado_atual,
                 "valor_atual": round(valor_atual, 2),
-                "valor_limite": limite,
-                "direcao": "subindo" if subida > 0 else "descendo" if subida < 0 else "estavel",
+                "valor_limite": valor_limite,
+                "direcao": direcao,
                 "subida_por_hora": round(subida, 3),
                 "valores_previstos": {
                     "6h": round(max(0, valor_atual + subida * 6), 2),
@@ -669,38 +766,84 @@ def gerar_previsoes(dados, limites, agora):
                     "24h": round(max(0, valor_atual + subida * 24), 2),
                     "48h": round(max(0, valor_atual + subida * 48), 2)
                 },
-                "horas_ate_limite": round(horas, 1) if horas is not None else None,
-                "horario_estimado": (formatar_timestamp(ultima_leitura + pd.Timedelta(hours=horas)) if horas is not None else None),
+                "horas_ate_limite": round(horas_critico, 1) if horas_critico is not None else None,
                 "horas_ate_atencao": round(horas_atencao, 1) if horas_atencao is not None else None,
                 "horas_ate_critico": round(horas_critico, 1) if horas_critico is not None else None,
-                "nivel_proximo_risco": nivel if horas is not None else None,
-                "r2": round(r2, 3),
+                "horario_critico": (formatar_timestamp(ultima_leitura + pd.Timedelta(hours=horas_critico)) if horas_critico is not None else None),
+                "horario_estimado": (formatar_timestamp(ultima_leitura + pd.Timedelta(hours=horas_critico)) if horas_critico is not None else None),
+                "nivel_proximo_risco": nivel,
+                "horas_em_critico": round(horas_em_critico, 1) if horas_em_critico is not None else None,
+                "critico_desde": critico_desde,
+                "excesso": round(excesso, 2) if excesso is not None else None,
+                "excesso_pct": excesso_pct,
+                "r2": round(r2, 3) if r2 is not None else None,
+                "limite_dano": round(limite_dano, 2) if limite_dano is not None else None,
+                "tendencia_critica": tendencia_critica,
+                "horas_ate_dano": round(horas_ate_dano, 1) if horas_ate_dano is not None else None,
+                "horario_dano": horario_dano,
+                "horas_ate_normalizar": round(horas_ate_normalizar, 1) if horas_ate_normalizar is not None else None,
+                "margem_restante_pct": margem_restante_pct,
                 "qualidade_tendencia": qualidade_tendencia
             })
 
     
         if componentes:
-            tabela = pd.DataFrame(componentes).sort_values("horas_ate_limite", ascending=True, na_position="last")
+            tabela = pd.DataFrame(componentes).sort_values("horas_ate_critico", ascending=True, na_position="last")
             tabela = tabela.astype(object).where(tabela.notna(), None)
             componentes = tabela.to_dict(orient="records")
 
         if componentes:
-            previsoes_validas = []
+            em_critico = []
+            futuras = []
+
             for c in componentes:
-                if c["horas_ate_limite"] is not None:
-                    previsoes_validas.append(c)
-         
+                if c["estado_atual"] == "critico":
+                    em_critico.append(c)
+                elif c["horas_ate_critico"] is not None:
+                    futuras.append(c)
+
+            critico_atual = None
+            for c in em_critico:
+                if critico_atual is None:
+                    critico_atual = c
+                    continue
+
+                horas_c = c["horas_ate_dano"] if c["horas_ate_dano"] is not None else 9999
+                horas_a = critico_atual["horas_ate_dano"] if critico_atual["horas_ate_dano"] is not None else 9999
+
+                if horas_c < horas_a or (horas_c == horas_a and (c["excesso_pct"] or 0) > (critico_atual["excesso_pct"] or 0)):
+                    critico_atual = c
+
+            proxima_falha = futuras[0] if futuras else None
+
+            if critico_atual is not None:
+                proxima_horas = 0
+                principal = critico_atual["componente"]
+            elif proxima_falha is not None:
+                proxima_horas = proxima_falha["horas_ate_critico"]
+                principal = proxima_falha["componente"]
+            else:
+                proxima_horas = None
+                principal = None
+
             previsoes.append({
                 "id_maquina": int(id_maquina),
-                "proxima_ocorrencia_em_horas": ( previsoes_validas[0]["horas_ate_limite"] if previsoes_validas else None),
-                "componente_com_maior_risco": (previsoes_validas[0]["componente"] if previsoes_validas else None),
+                "critico_atual": critico_atual,
+                "proxima_falha": proxima_falha,
+                "proxima_ocorrencia_em_horas": proxima_horas,
+                "componente_com_maior_risco": principal,
+                "horas_ate_dano": critico_atual["horas_ate_dano"] if critico_atual is not None else None,
                 "componentes": componentes
             })
 
     if not previsoes:
         return []
 
-    tabela = pd.DataFrame(previsoes).sort_values("proxima_ocorrencia_em_horas", ascending=True, na_position="last")
+    tabela = pd.DataFrame(previsoes)
+    tabela["ordem_critico"] = tabela["critico_atual"].apply(lambda c: 0 if c is not None else 1)
+    tabela["ordem_horas"] = tabela.apply(lambda p: p["horas_ate_dano"] if p["critico_atual"] is not None else p["proxima_ocorrencia_em_horas"], axis=1)
+    tabela = tabela.sort_values(["ordem_critico", "ordem_horas"], ascending=True, na_position="last")
+    tabela = tabela.drop(columns=["ordem_critico", "ordem_horas"])
     tabela = tabela.astype(object).where(tabela.notna(), None)
     return tabela.to_dict(orient="records")
 
@@ -708,6 +851,8 @@ def gerar_previsoes(dados, limites, agora):
 
 
 def main(idempresa, dia):
+    CACHE_CSV.clear()
+
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
     data = pd.to_datetime(dia)
@@ -808,44 +953,44 @@ def main(idempresa, dia):
         metricas = [c for c in dados_mes.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados_mes, metricas, None)
-        series = calcular_series(dados_mes, metricas, None)
+        series = calcular_series(dados_mes, metricas, None, "1D")
 
         destinogeralempresames = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}/mes={mes}")
 
-        juntar_metricas(f"{destinogeralempresames}", kpis , series)
+        juntar_metricas(f"{destinogeralempresames}", kpis , series, "1D")
 
         for id_farm in dados_mes["id_farm"].unique():
 
             dados_farm = dados_mes[dados_mes["id_farm"] == id_farm]
 
             kpis = calcular_kpis(dados_farm, metricas, None)
-            series = calcular_series(dados_farm, metricas, None)
+            series = calcular_series(dados_farm, metricas, None, "1D")
 
             destinogeralfarmmes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}/mes={mes}")
 
-            juntar_metricas(f"{destinogeralfarmmes}", kpis , series)
+            juntar_metricas(f"{destinogeralfarmmes}", kpis , series, "1D")
 
             for id_sessao in dados_farm["id_sessao"].unique():
 
                 dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
                 kpis = calcular_kpis(dados_sessao, metricas, None)
-                series = calcular_series(dados_sessao, metricas, None)
+                series = calcular_series(dados_sessao, metricas, None, "1D")
 
                 destinogeralsessaomes = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}/mes={mes}")
 
-                juntar_metricas(f"{destinogeralsessaomes}", kpis , series)
+                juntar_metricas(f"{destinogeralsessaomes}", kpis , series, "1D")
 
                 for id_maquina in dados_sessao["_id_maquina"].unique():
 
                     dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
 
                     kpis = calcular_kpis(dados, metricas, id_maquina)
-                    series = calcular_series(dados, metricas, id_maquina)
+                    series = calcular_series(dados, metricas, id_maquina, "1D")
 
                     destinoespecificomes = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}/mes={mes}")
 
-                    juntar_metricas(f"{destinoespecificomes}", kpis , series)
+                    juntar_metricas(f"{destinoespecificomes}", kpis , series, "1D")
 
     dados_ano = ler_trusted(prefixo_silver_ano, maquinas)
 
@@ -854,44 +999,44 @@ def main(idempresa, dia):
         metricas = [c for c in dados_ano.columns if c in NUMERICAS]
 
         kpis = calcular_kpis(dados_ano, metricas, None)
-        series = calcular_series(dados_ano, metricas, None)
+        series = calcular_series(dados_ano, metricas, None, "1D")
 
         destinogeralempresaano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/historico/ano={ano}")
 
-        juntar_metricas(f"{destinogeralempresaano}", kpis , series)
+        juntar_metricas(f"{destinogeralempresaano}", kpis , series, "1D")
 
         for id_farm in dados_ano["id_farm"].unique():
 
             dados_farm = dados_ano[dados_ano["id_farm"] == id_farm]
 
             kpis = calcular_kpis(dados_farm, metricas, None)
-            series = calcular_series(dados_farm, metricas, None)
+            series = calcular_series(dados_farm, metricas, None, "1D")
 
             destinogeralfarmano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/historico/ano={ano}")
 
-            juntar_metricas(f"{destinogeralfarmano}", kpis , series)
+            juntar_metricas(f"{destinogeralfarmano}", kpis , series, "1D")
 
             for id_sessao in dados_farm["id_sessao"].unique():
 
                 dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
 
                 kpis = calcular_kpis(dados_sessao, metricas, None)
-                series = calcular_series(dados_sessao, metricas, None)
+                series = calcular_series(dados_sessao, metricas, None, "1D")
 
                 destinogeralsessaoano = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}/historico/ano={ano}")
 
-                juntar_metricas(f"{destinogeralsessaoano}", kpis , series)
+                juntar_metricas(f"{destinogeralsessaoano}", kpis , series, "1D")
 
                 for id_maquina in dados_sessao["_id_maquina"].unique():
 
                     dados = dados_sessao[dados_sessao["_id_maquina"] == id_maquina]
 
                     kpis = calcular_kpis(dados, metricas, id_maquina)
-                    series = calcular_series(dados, metricas, id_maquina)
+                    series = calcular_series(dados, metricas, id_maquina, "1D")
 
                     destinoespecificoano = (f"{idempresa}/{nome_sanitizado}/operacional/especifico/farm={id_farm}/sessao={id_sessao}/maquina={id_maquina}/historico/ano={ano}")
 
-                    juntar_metricas(f"{destinoespecificoano}", kpis , series)
+                    juntar_metricas(f"{destinoespecificoano}", kpis , series, "1D")
 
 
 
@@ -901,31 +1046,35 @@ def main(idempresa, dia):
 
         destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral")
 
+        status_todos = gerar_status_geral(historico, limites, agora)
+        previsoes_todas = gerar_previsoes(historico, limites, agora)
+
         gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(historico))
         gravar_janelas(destino, historico, metricas, None, agora, limites)
-        gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(historico, limites, agora))
-        previsoes = gerar_previsoes(historico, limites, agora)
-        gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
+        gravar_s3(f"{destino}/tempo_real/status.json", status_todos)
+        gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes_todas)
 
         for id_farm in historico["id_farm"].unique():
 
             dados_farm = historico[historico["id_farm"] == id_farm]
+            ids_farm = [int(x) for x in dados_farm["_id_maquina"].unique()]
 
             destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}")
 
             gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_farm))
             gravar_janelas(destino, dados_farm, metricas, None, agora, limites)
-            gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_farm, limites, agora))
+            gravar_s3(f"{destino}/tempo_real/status.json", [s for s in status_todos if s["id_maquina"] in ids_farm])
 
             for id_sessao in dados_farm["id_sessao"].unique():
 
                 dados_sessao = dados_farm[dados_farm["id_sessao"] == id_sessao]
+                ids_sessao = [int(x) for x in dados_sessao["_id_maquina"].unique()]
 
                 destino = (f"{idempresa}/{nome_sanitizado}/operacional/geral/farm={id_farm}/sessao={id_sessao}")
 
                 gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual_geral(dados_sessao))
                 gravar_janelas(destino, dados_sessao, metricas, None, agora, limites)
-                gravar_s3(f"{destino}/tempo_real/status.json", gerar_status_geral(dados_sessao, limites, agora))
+                gravar_s3(f"{destino}/tempo_real/status.json", [s for s in status_todos if s["id_maquina"] in ids_sessao])
 
                 for id_maquina in dados_sessao["_id_maquina"].unique():
 
@@ -936,12 +1085,13 @@ def main(idempresa, dia):
                     gravar_s3(f"{destino}/tempo_real/atual.json", gerar_atual(dados))
                     gravar_janelas(destino, dados, metricas, id_maquina, agora, limites)
 
-                    status = gerar_status_geral(dados, limites, agora)
-                    gravar_s3(f"{destino}/tempo_real/status.json", status[0])
-                    previsoes = gerar_previsoes(dados, limites, agora)
-                    gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes)
+                    status_maquina = [s for s in status_todos if s["id_maquina"] == int(id_maquina)]
+                    previsoes_maquina = [p for p in previsoes_todas if p["id_maquina"] == int(id_maquina)]
+
+                    gravar_s3(f"{destino}/tempo_real/status.json", status_maquina[0])
+                    gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes_maquina)
                     
-    print("teste")
+    print(f"Gold concluído: empresa {idempresa}, dia {dia}")
 
 def lambda_handler(event, context=None):
     garantir_conexao()
