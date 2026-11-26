@@ -556,38 +556,34 @@ def main():
 
     days = args.historic_days if args.historic_days and args.historic_days > 0 else 1
 
+    dados_maquinas = {}
+    for (f_id, s_id, m_id, mac) in machines_list:
+        dados_maquinas[m_id] = (get_monitored_components(cursor, m_id), get_limits_for_machine(cursor, m_id))
+
     for day_offset in range(days):
         hoje = day_offset == 0
         assignment = sortear_estados(n_machines, PESOS_HOJE if hoje else PESOS_PASSADO)
 
         for idx, (f_id, s_id, m_id, mac) in enumerate(machines_list):
             mac_clean = str(mac).strip().lower().replace('-', ':')
-            monitored = get_monitored_components(cursor, m_id)
-            limits = get_limits_for_machine(cursor, m_id)
+            # monitored = get_monitored_components(cursor, m_id)
+            # limits = get_limits_for_machine(cursor, m_id)
+            monitored, limits = dados_maquinas[m_id]
             estado = assignment[idx]
             alvos = escolher_alvos(estado, monitored)
 
             if hoje:
                 planos = montar_planos(limits, estado, alvos, args.trend_hours)
+                idades = []
                 for k in range(args.trend_hours):
                     if k == 0:
-                        idades = [random.randint(0, 240) for _ in range(args.rows_per_file)]
+                        idades += [random.randint(0, 240) for _ in range(args.rows_per_file)]
                     else:
-                        idades = [k * 3600 + random.randint(0, 1800) for _ in range(args.rows_per_file)]
-                    when = agora - timedelta(seconds=min(idades))
-                    content = gerar_csv(mac_clean, agora, idades, planos)
-                    uploaded.append(upload_bytes_to_s3(s3, content, args.empresa_id, mac_clean, when))
-                print(f'Uploaded {args.trend_hours} arquivos horarios | rig {m_id} | estado={estado} | alvos={sorted(alvos)}')
-            else:
-                estado_dia = 'normal' if estado == 'rising' else estado
-                planos = montar_planos(limits, estado_dia, alvos if estado_dia != 'normal' else set(), 1)
-                for i in range(args.files_per_machine):
-                    when = agora - timedelta(days=day_offset, minutes=random.randint(0, 120))
-                    idades = [random.randint(0, 300) for _ in range(args.rows_per_file)]
-                    content = gerar_csv(mac_clean, when, idades, planos)
-                    key = upload_bytes_to_s3(s3, content, args.empresa_id, mac_clean, when)
-                    uploaded.append(key)
-                    print('Uploaded', key, f'(day={day_offset} estado={estado_dia})')
+                        idades += [k * 3600 + random.randint(0, 1800) for _ in range(args.rows_per_file)]
+                when = agora - timedelta(seconds=min(idades))
+                content = gerar_csv(mac_clean, agora, idades, planos)
+                uploaded.append(upload_bytes_to_s3(s3, content, args.empresa_id, mac_clean, when))
+                print(f'Uploaded 1 arquivo ({len(idades)} linhas) | rig {m_id} | estado={estado} | alvos={sorted(alvos)}')
 
     print('Done. Uploaded', len(uploaded), 'files to', BUCKET)
 

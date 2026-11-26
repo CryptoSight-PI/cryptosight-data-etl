@@ -8,6 +8,7 @@ import re
 from datetime import date
 from sklearn.linear_model import LinearRegression
 from urllib.parse import unquote_plus
+from concurrent.futures import ThreadPoolExecutor
 
 
 FUSO_LOCAL = "America/Sao_Paulo"
@@ -48,6 +49,8 @@ NUMERICAS = [
 ]
 
 CACHE_CSV = {}
+PENDENTES = []
+TRABALHADORES = 16
 
 
 def particao(dia):
@@ -132,13 +135,32 @@ def formatar_timestamp(timestamp):
     return timestamp.tz_convert(FUSO_LOCAL).isoformat(timespec="seconds")
 
 #coloca o conteudo no s3, com base na chave / prefixo
+# def gravar_s3(chave, conteudo):
+#     s3.put_object(
+#         Bucket=bucket_gold,
+#         Key=chave,
+#         Body=json.dumps({"gerado_em": formatar_timestamp(pd.Timestamp.now(tz="UTC")), "dados": conteudo}, ensure_ascii=False, default=float, indent=2),
+#         ContentType="application/json",
+#     )
+
 def gravar_s3(chave, conteudo):
-    s3.put_object(
-        Bucket=bucket_gold,
-        Key=chave,
-        Body=json.dumps({"gerado_em": formatar_timestamp(pd.Timestamp.now(tz="UTC")), "dados": conteudo}, ensure_ascii=False, default=float, indent=2),
-        ContentType="application/json",
-    )
+    corpo = json.dumps({"gerado_em": formatar_timestamp(pd.Timestamp.now(tz="UTC")), "dados": conteudo}, ensure_ascii=False, default=float, indent=2)
+    PENDENTES.append((chave, corpo))
+
+
+def enviar_pendentes():
+    def enviar(item):
+        s3.put_object(
+            Bucket=bucket_gold,
+            Key=item[0],
+            Body=item[1],
+            ContentType="application/json",
+        )
+
+    with ThreadPoolExecutor(TRABALHADORES) as executor:
+        list(executor.map(enviar, PENDENTES))
+
+    PENDENTES.clear()
 
 
 #calculo de kpis de um df com base nas metricas (usada para nao fazer calculo de timestamp, user...)
@@ -284,9 +306,77 @@ def gerar_atual_geral(dados):
     }
 
 
+# def ler_trusted(prefixo, maquinas):
+
+#     vetor = []
+
+#     paginator = s3.get_paginator("list_objects_v2")
+#     for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo):
+#         for i in page.get("Contents", []):
+#             key = i["Key"]
+#             nome_arquivo = key.rsplit("/", 1)[-1]
+
+#             # só dados limpos; dados_nulos_*.csv (descartados) não entram nas métricas
+#             if not (nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv")):
+#                 continue
+
+#             if key not in CACHE_CSV:
+#                 conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+#                 CACHE_CSV[key] = pd.read_csv(io.BytesIO(conteudo), sep=";")
+
+#             df = CACHE_CSV[key].copy()
+
+#             if df.empty:
+#                 continue
+
+#             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+
+#             if "user" not in df.columns:
+#                 print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
+#                 continue
+
+#             df["mac"] = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
+
+#             df = df.merge(maquinas, on="mac")
+
+#             if df.empty:
+#                 continue
+
+#             vetor.append(df)
+
+#     if not vetor:
+#         vazio = pd.DataFrame(columns=["timestamp", "id_farm", "id_sessao", "_id_maquina"])
+#         vazio["timestamp"] = pd.to_datetime(vazio["timestamp"], utc=True)
+#         return vazio
+
+#     return pd.concat(vetor, ignore_index=True)
+
+def carregar_csv(key, maquinas):
+    conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
+    df = pd.read_csv(io.BytesIO(conteudo), sep=";")
+
+    if df.empty:
+        return None
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+
+    if "user" not in df.columns:
+        print(f"Coluna user não encontrada em {key}: {df.columns.tolist()}")
+        return None
+
+    df["mac"] = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
+
+    df = df.merge(maquinas, on="mac")
+
+    if df.empty:
+        return None
+
+    return df
+
+
 def ler_trusted(prefixo, maquinas):
 
-    vetor = []
+    chaves = []
 
     paginator = s3.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket_silver, Prefix=prefixo):
@@ -294,33 +384,18 @@ def ler_trusted(prefixo, maquinas):
             key = i["Key"]
             nome_arquivo = key.rsplit("/", 1)[-1]
 
-            # só dados limpos; dados_nulos_*.csv (descartados) não entram nas métricas
-            if not (nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv")):
-                continue
+            if nome_arquivo.startswith("clean_data_") and nome_arquivo.endswith(".csv"):
+                chaves.append(key)
 
-            if key not in CACHE_CSV:
-                conteudo = s3.get_object(Bucket=bucket_silver, Key=key)["Body"].read()
-                CACHE_CSV[key] = pd.read_csv(io.BytesIO(conteudo), sep=";")
+    novas = [k for k in chaves if k not in CACHE_CSV]
 
-            df = CACHE_CSV[key].copy()
+    with ThreadPoolExecutor(TRABALHADORES) as executor:
+        resultados = list(executor.map(carregar_csv, novas, [maquinas] * len(novas)))
 
-            if df.empty:
-                continue
+    for key, df in zip(novas, resultados):
+        CACHE_CSV[key] = df
 
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
-
-            if "user" not in df.columns:
-                print(f"Coluna user não encontrada em {nome_arquivo}: {df.columns.tolist()}")
-                continue
-
-            df["mac"] = df["user"].astype(str).str.strip().str.lower().str.replace("-", ":", regex=False)
-
-            df = df.merge(maquinas, on="mac")
-
-            if df.empty:
-                continue
-
-            vetor.append(df)
+    vetor = [CACHE_CSV[k] for k in chaves if CACHE_CSV[k] is not None]
 
     if not vetor:
         vazio = pd.DataFrame(columns=["timestamp", "id_farm", "id_sessao", "_id_maquina"])
@@ -328,7 +403,6 @@ def ler_trusted(prefixo, maquinas):
         return vazio
 
     return pd.concat(vetor, ignore_index=True)
-
 
 def gravar_catalogo(idempresa , nomesanitizado):
     cursor.execute("""select f.id, f.nome, s.id, s.nome, m.id, m.modelo , m.tipo from empresa e join farm f on f.id_empresa = e.id join sessao s on s.id_farm = f.id join maquina m on m.id_sessao = s.id where e.id = %s
@@ -852,6 +926,7 @@ def gerar_previsoes(dados, limites, agora):
 
 def main(idempresa, dia):
     CACHE_CSV.clear()
+    PENDENTES.clear()
 
     nome_sanitizado = sanitizar_nome(buscar_empresa(idempresa))
     catalogomaq , limites = gravar_catalogo(idempresa , nome_sanitizado)
@@ -1090,6 +1165,8 @@ def main(idempresa, dia):
 
                     gravar_s3(f"{destino}/tempo_real/status.json", status_maquina[0])
                     gravar_s3(f"{destino}/previsoes/previsoes.json", previsoes_maquina)
+
+    enviar_pendentes()
                     
     print(f"Gold concluído: empresa {idempresa}, dia {dia}")
 
