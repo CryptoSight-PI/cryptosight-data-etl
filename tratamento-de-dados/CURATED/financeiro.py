@@ -26,9 +26,9 @@ WHERE f.id_empresa = %s
         """
 
         cursor.execute(consulta, (id_empresa,))
-        empresa = cursor.fetchall()
+        pagamentos = cursor.fetchall()
 
-        return empresa
+        return pagamentos
 
     finally:
         if 'cursor' in locals():
@@ -38,22 +38,18 @@ WHERE f.id_empresa = %s
 
 def extrair_aluguel(id_empresa):
     conexao = mysql.connector.connect(**DB_CONFIG)
-    conexao = mysql.connector.connect(**DB_CONFIG)
 
     try:
         cursor = conexao.cursor()
 
         consulta = """
-SELECT f.nome, u.nome, p.valor, p.categoria, p.data_hora_pagamento FROM pagamento p
-JOIN usuario u on p.id_usuario = u.id
-JOIN farm f on p.id_farm = f.id
-WHERE f.id_empresa = %s
+SELECT id, aluguel, dia_pagamento_aluguel FROM farm WHERE id_empresa = %s
         """
 
         cursor.execute(consulta, (id_empresa,))
-        empresa = cursor.fetchall()
+        alugueis = cursor.fetchall()
 
-        return empresa
+        return alugueis
 
     finally:
         if 'cursor' in locals():
@@ -64,6 +60,7 @@ WHERE f.id_empresa = %s
 def montarJSON(empresa_id):
     jsons = []
     dados = extrair_pagamentos(empresa_id)
+    alugueis = extrair_aluguel(empresa_id)
     for dado in dados:
         json = {
             "farm": dado[0],
@@ -74,9 +71,16 @@ def montarJSON(empresa_id):
         }
         jsons.append(json)
 
+    for aluguel in alugueis:
+        json = {
+            "farm": aluguel[0],
+            "aluguel": aluguel[1],
+            "diaPagamento": aluguel[2]
+        }
+
     return jsons
 
-print(montarJSON(1)[2])
+print(montarJSON(1))
 
 # from trusted_to_curated import sanitizar_nome, ARQUIVOS
 # from CURATED.utils import sanitizar_nome , ARQUIVOS
